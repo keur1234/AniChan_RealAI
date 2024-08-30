@@ -125,7 +125,7 @@ def store_chat_history_to_csv(user_id, user_message, bot_message):
         writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'user_message': user_message, 'bot_message': bot_message})
 
 @app.route("/", methods=['POST'])
-async def webhook():
+def webhook():
     if request.method == 'POST':
         payload = request.json
         app.logger.info(f"Received payload: {json.dumps(payload, indent=2)}")
