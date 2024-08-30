@@ -15,7 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 8080
 RUN mkdir -p /etc/env
 
-ENV MY_VARIABLE=value
 
 # Run app.py when the container launches
 CMD gunicorn --bind :8080 app:app --timeout 600
