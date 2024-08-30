@@ -125,29 +125,27 @@ def store_chat_history_to_csv(user_id, user_message, bot_message):
         writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'user_message': user_message, 'bot_message': bot_message})
 
 @app.route("/", methods=['POST'])
-def webhook():
+async def webhook():
     if request.method == 'POST':
         payload = request.json
         app.logger.info(f"Received payload: {json.dumps(payload, indent=2)}")
 
         try:
     
-            event = payload['events'][0]
-            user_id = event['source']['userId']
-            message_type = event['message']['type']
+            for event in payload['events']:
+                user_id = event["source"]["userId"]
+                # Get reply token (reply in 1 min)
+                reply_token = event['replyToken'] 
             
-            if message_type == 'text':
-                message = event['message']['text']
-
-                Reply_message = generate_response(user_id, message)
+            if event['type'] == 'message':
+                message = event["message"]["text"]
+                Reply_message = generate_response(reply_token, message)
                 
                 PushMessage(user_id, Reply_message)
                 app.logger.info(f"Message pushed to user {user_id}: {Reply_message}")
 
-            else:
-                app.logger.info(f"Unsupported message type: {message_type}")
+            return request.json, 200
 
-            return '', 200
 
         except Exception as e:
             app.logger.error(f"Error in webhook: {e}")
@@ -155,8 +153,8 @@ def webhook():
     else:
         abort(400)
 
-def PushMessage(user_id, TextMessage):
-    LINE_API = 'https://api.line.me/v2/bot/message/push'
+def PushMessage(reply_token, TextMessage):
+    LINE_API = 'https://api.line.me/v2/bot/message/reply'
     Authorization = f'Bearer {os.getenv("LINE_CHANNEL_ACCESS_TOKEN")}'
     app.logger.info(f"Authorization: {Authorization}")
     
@@ -164,11 +162,13 @@ def PushMessage(user_id, TextMessage):
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': Authorization
     }
-    
+     # remove * and # in message
+    answer = TextMessage[0]["output"].replace("*", "").replace("#", "")
+
     img_url = extract_image_url(TextMessage)
     if img_url:
         data = {
-            "to": user_id,
+            "to": reply_token,
             "messages": [{
                 "type": "image",
                 "originalContentUrl": img_url[0],
@@ -176,16 +176,16 @@ def PushMessage(user_id, TextMessage):
             },
             {
                 "type": "text",
-                "text": TextMessage,
+                "text": answer,
             }]
         }
     else:
         data = {
-            "to": user_id,
+            "to": reply_token,
             "messages": [
                 {
                     "type": "text",
-                    "text": TextMessage,
+                    "text": answer,
                 }
             ]
         }
@@ -224,4 +224,4 @@ def extract_image_url(input_string):
     return matches if matches else None
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(port=8080)
