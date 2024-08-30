@@ -141,7 +141,7 @@ def webhook():
                 message = event["message"]["text"]
 
                 Reply_message = generate_response(reply_token, message)
-                PushMessage(Reply_message, user_id)
+                PushMessage(user_id, Reply_message)
                 app.logger.info(f"Message pushed to user {user_id}: {Reply_message}")
 
             return request.json, 200
@@ -161,32 +161,15 @@ def PushMessage(reply_token, TextMessage):
         'Authorization': Authorization
     }
      # remove * and # in message
-    answer = TextMessage[0]["output"].replace("*", "").replace("#", "")
-
-    img_url = extract_image_url(answer)
-    if img_url:
-        data = {
-            "replyToken": reply_token,
-            "messages": [{
-                "type": "image",
-                "originalContentUrl": img_url[0],
-                "previewImageUrl": img_url[0],
-            },
+    data = {
+        "replyToken": reply_token,
+        "messages": [
             {
                 "type": "text",
-                "text": answer,
-            }]
-        }
-    else:
-        data = {
-            "replyToken": reply_token,
-            "messages": [
-                {
-                    "type": "text",
-                    "text": answer,
-                }
-            ]
-        }
+                "text": TextMessage,
+            }
+        ]
+    }
 
     data = json.dumps(data)
     
@@ -204,7 +187,7 @@ def PushMessage(reply_token, TextMessage):
             "messages": [
                 {
                     "type": "text",
-                    "text": answer,
+                    "text": TextMessage,
                 }
             ]
         }
@@ -217,10 +200,7 @@ def PushMessage(reply_token, TextMessage):
         except requests.exceptions.RequestException as fallback_e:
             app.logger.error(f"Failed to push fallback message: {fallback_e}")
 
-def extract_image_url(input_string):
-    url_pattern = re.compile(r'https://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
-    matches = url_pattern.findall(input_string)
-    return matches if matches else None
+
 
 if __name__ == "__main__":
     app.run(port=8080)
