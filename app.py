@@ -54,22 +54,22 @@ def call_with_retry(api_call, max_retries=5, initial_delay=2):
                 raise e
     raise Exception("Max retries exceeded")
 
-def chat_with_ani(prompt, input_text, user_id, chat_history):
+def chat_with_ani(prompt, message, user_id, chat_history):
     # Define the API call function
     def api_call():
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", api_key=api_key)
         model = prompt | llm
-        return model.invoke({"input": input_text, "chat_history": chat_history})
+        return model.invoke({"input": message, "chat_history": chat_history})
     
     # Call the API with retry mechanism
     model_response = call_with_retry(api_call)
 
     # Update the chat history
-    chat_history.append(HumanMessage(input_text))
+    chat_history.append(HumanMessage(message))
     chat_history.append(AIMessage(model_response.content))
 
     # Store chat history
-    store_chat_history_to_csv(user_id, HumanMessage(input_text), model_response.content)
+    store_chat_history_to_csv(user_id, HumanMessage(message), model_response.content)
     return model_response
 
 def generate_response(user_id, message):
@@ -139,10 +139,10 @@ def webhook():
             
             if event['type'] == 'message':
                 message = event["message"]["text"]
-
-                Reply_message = generate_response(reply_token, message)
-                PushMessage(user_id, Reply_message)
-                app.logger.info(f"Message pushed to user {user_id}: {Reply_message}")
+            
+                Reply_message = generate_response(user_id, message)
+                PushMessage(reply_token, Reply_message)
+                app.logger.info(f"Message pushed to user {reply_token}: {Reply_message}")
 
             return request.json, 200
 
@@ -170,7 +170,7 @@ def PushMessage(reply_token, TextMessage):
             }
         ]
     }
-
+    print(TextMessage)
     data = json.dumps(data)
     
     try:
@@ -203,4 +203,4 @@ def PushMessage(reply_token, TextMessage):
 
 
 if __name__ == "__main__":
-    app.run(port=8080)
+    app.run(port=8080, debug=True)
