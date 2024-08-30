@@ -139,9 +139,9 @@ def webhook():
             
             if event['type'] == 'message':
                 message = event["message"]["text"]
+
                 Reply_message = generate_response(reply_token, message)
-                
-                PushMessage(user_id, Reply_message)
+                PushMessage(Reply_message, user_id)
                 app.logger.info(f"Message pushed to user {user_id}: {Reply_message}")
 
             return request.json, 200
@@ -155,9 +155,7 @@ def webhook():
 
 def PushMessage(reply_token, TextMessage):
     LINE_API = 'https://api.line.me/v2/bot/message/reply'
-    Authorization = f'Bearer {os.getenv("LINE_CHANNEL_ACCESS_TOKEN")}'
-    app.logger.info(f"Authorization: {Authorization}")
-    
+    Authorization = f'Bearer {os.getenv("LINE_CHANNEL_ACCESS_TOKEN")}'    
     headers = {
         'Content-Type': 'application/json; charset=UTF-8',
         'Authorization': Authorization
@@ -165,10 +163,10 @@ def PushMessage(reply_token, TextMessage):
      # remove * and # in message
     answer = TextMessage[0]["output"].replace("*", "").replace("#", "")
 
-    img_url = extract_image_url(TextMessage)
+    img_url = extract_image_url(answer)
     if img_url:
         data = {
-            "to": reply_token,
+            "replyToken": reply_token,
             "messages": [{
                 "type": "image",
                 "originalContentUrl": img_url[0],
@@ -181,7 +179,7 @@ def PushMessage(reply_token, TextMessage):
         }
     else:
         data = {
-            "to": reply_token,
+            "replyToken": reply_token,
             "messages": [
                 {
                     "type": "text",
@@ -196,16 +194,17 @@ def PushMessage(reply_token, TextMessage):
         response = requests.post(LINE_API, headers=headers, data=data)
         response.raise_for_status()
         app.logger.info(f"Message pushed: {response.status_code}")
+
     except requests.exceptions.RequestException as e:
         app.logger.error(f"Failed to push message: {e}")
 
         # Fallback: Send only the text message
         fallback_data = {
-            "to": user_id,
+            "reply_token": reply_token,
             "messages": [
                 {
                     "type": "text",
-                    "text": TextMessage,
+                    "text": answer,
                 }
             ]
         }
