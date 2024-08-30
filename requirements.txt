@@ -1,0 +1,9 @@
+Flask
+line-bot-sdk
+python-dotenv
+requests
+google-generativeai
+pandas
+joblib
+langchain-core
+langchain-google-genai
