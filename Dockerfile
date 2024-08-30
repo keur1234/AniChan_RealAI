@@ -12,11 +12,11 @@ COPY . /app
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Make port 8080 available to the world outside this container
-EXPOSE 5000
+EXPOSE 8080
 RUN mkdir -p /etc/env
 COPY .env /etc/env/.env
 
 ENV MY_VARIABLE=value
 
 # Run app.py when the container launches
-CMD ["python", "app.py"]
+CMD gunicorn --bind :8080 app:app --timeout 600
