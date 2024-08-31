@@ -34,8 +34,7 @@ genai.configure(api_key=api_key)
 
 # Initialize conversation histories
 user_histories = {}
-chat_history=[]
-
+chat_history_dict={}
 
 def call_with_retry(api_call, max_retries=5, initial_delay=2):
     retries = 0
@@ -54,8 +53,14 @@ def call_with_retry(api_call, max_retries=5, initial_delay=2):
                 raise e
     raise Exception("Max retries exceeded")
 
-def chat_with_ani(prompt, message, user_id, chat_history):
+def chat_with_ani(prompt, message, user_id, chat_history_dict):
     # Define the API call function
+    # Check if the user_id has an existing chat history
+
+    if user_id not in chat_history_dict:
+        chat_history_dict[user_id] = []  # Initialize an empty chat history if none exists
+    
+    chat_history = chat_history_dict[user_id]
     def api_call():
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", api_key=api_key)
         model = prompt | llm
@@ -70,6 +75,10 @@ def chat_with_ani(prompt, message, user_id, chat_history):
 
     # Store chat history
     store_chat_history_to_csv(user_id, HumanMessage(message), model_response.content)
+
+    # Update the chat history dictionary with the new history
+    chat_history_dict[user_id] = chat_history
+
     return model_response
 
 def generate_response(user_id, message):
@@ -85,15 +94,10 @@ def generate_response(user_id, message):
     ])
 
 
-    response = chat_with_ani(prompt, message, user_id, chat_history)
+    response = chat_with_ani(prompt, message, user_id, chat_history_dict)
     
-    # Print the response
-    print(response.content)
-    
+    # Print the respons    
     return response.content
-
-
-
 
 
 
@@ -139,7 +143,7 @@ def webhook():
             
             if event['type'] == 'message':
                 message = event["message"]["text"]
-            
+        
                 Reply_message = generate_response(user_id, message)
                 PushMessage(reply_token, Reply_message)
                 app.logger.info(f"Message pushed to user {reply_token}: {Reply_message}")
