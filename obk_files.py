@@ -9,7 +9,7 @@ import time
 
 import obk_validator
 
-ALLOWED_EXTENSIONS = ('.xlsx', '.xls', '.csv')
+ALLOWED_EXTENSIONS = ('.xlsx', '.xlsm', '.xls', '.csv')
 MAX_FILE_BYTES = int(os.getenv("OBK_MAX_FILE_MB", "20")) * 1024 * 1024
 DOWNLOAD_TTL_SECONDS = int(os.getenv("OBK_DOWNLOAD_TTL_HOURS", "24")) * 3600
 WORK_ROOT = os.path.join(tempfile.gettempdir(), "anichan_obk")

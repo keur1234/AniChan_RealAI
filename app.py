@@ -90,7 +90,7 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
   TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
   TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
 - ถ้าข้อความมี "[ผลตรวจจากระบบ]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
-- พี่พิมพ์โค้ดมา หรือใช้ /check ตามด้วยโค้ด หนูจะตรวจให้ (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel/CSV มาตรวจทั้งไฟล์ได้
+- พี่พิมพ์โค้ดมา หรือใช้ /check ตามด้วยโค้ด หนูจะตรวจให้ (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel (.xlsx .xlsm .xls) หรือ CSV มาตรวจทั้งไฟล์ได้
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
@@ -283,7 +283,8 @@ def handle_file(event, chat_id, user_id, base_url):
     file_name = obk_files.safe_name(message.get("fileName", ""))
 
     if not obk_files.is_supported(file_name):
-        send_reply(reply_token, chat_id, "ตอนนี้หนูตรวจได้แค่ไฟล์ .xlsx .xls และ .csv ที่มี Index code นะคะพี่")
+        log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
+        send_reply(reply_token, chat_id, f"หนูได้รับไฟล์ {file_name} ค่ะ แต่ตอนนี้หนูตรวจได้แค่ไฟล์ .xlsx .xlsm .xls และ .csv ที่มี Index code นะคะพี่")
         return
     if obk_validator.get_master() is None:
         send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจไฟล์ให้ไม่ได้")
