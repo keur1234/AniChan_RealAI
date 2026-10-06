@@ -473,8 +473,10 @@ def handle_group_event(event, chat_id, user_id, base_url):
 
     if msg_type == "file":
         remember_group_file(chat_id, user_id, message)
+        log.info("Group file %r saved; waiting for /check", message.get("fileName"))
         return
     if msg_type != "text":
+        log.info("Group %s message ignored (only /check or @mention get a reply)", msg_type)
         return
 
     text = message["text"].strip()
@@ -497,6 +499,7 @@ def handle_group_event(event, chat_id, user_id, base_url):
 
     if GROUP_CHAT_ON_MENTION and is_bot_mentioned(message):
         return handle_text(event, chat_id, user_id, strip_bot_mention(message) or "Hello", mention_user_id=user_id)
+    log.info("Group text ignored (only /check or @mention get a reply)")
 
 
 def handle_event(event, base_url=""):
@@ -508,6 +511,8 @@ def handle_event(event, base_url=""):
     # Groups/rooms share one memory so Ani follows the group conversation
     chat_id = source.get("groupId") or source.get("roomId") or user_id
     message = event["message"]
+    log.info("Message from %s in %s chat: type=%s text=%r", user_id[-6:], source.get("type"),
+             message.get("type"), message.get("text", "")[:60])
     if message.get("type") == "text":
         lang = detect_language(message["text"])
         if lang:
