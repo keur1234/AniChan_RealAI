@@ -169,43 +169,59 @@ def check_code(code, md):
         if '8' in rules:
             close = difflib.get_close_matches(asset_type, md['_equipment_types'], n=3, cutoff=0.6)
             if close:
-                result['hints'].append(f"Asset Type ที่ใกล้เคียง: {', '.join(close)}")
+                result['hints'].append(f"Asset Type ที่ใกล้เคียงใน Reference Table: {', '.join(close)}")
     if code != code.upper() and t != 'TYPE A':
         upper_type = apply_override(code.upper(), validate_index_code(code.upper(), md)[2])
         if upper_type == 'TYPE A':
-            result['hints'].append(f"ถ้าเปลี่ยนเป็นตัวพิมพ์ใหญ่ ({code.upper()}) จะผ่าน TYPE A")
+            result['hints'].append(f"หากแก้ไขเป็นตัวพิมพ์ใหญ่ ({code.upper()}) รหัสจะผ่านเกณฑ์ TYPE A")
     if len(parts) >= 3 and '4' in rules:
         loc = '-'.join(parts[:3])
         close = difflib.get_close_matches(loc, md['_locations'], n=3, cutoff=0.7)
         if close:
-            result['hints'].append(f"Location ที่ใกล้เคียง: {', '.join(close)}")
+            result['hints'].append(f"Location ที่ใกล้เคียงใน Reference Table: {', '.join(close)}")
     return result
 
 
-TYPE_ICON = {'TYPE A': '✅', 'TYPE B': '🟡', 'TYPE B OR C': '🟠', 'TYPE C': '❌', 'N/A': '⚪'}
+TYPE_LABEL_TH = {
+    'TYPE A': 'ผ่านเกณฑ์',
+    'TYPE B': 'Running Number ซ้ำ',
+    'TYPE B OR C': 'ต้องตรวจสอบ Equipment / Asset Type',
+    'TYPE C': 'ไม่ผ่านเกณฑ์บังคับ',
+    'N/A': 'ข้อยกเว้น',
+}
+
+
+def reason_text(reason):
+    """Display form of a rule message ('กฏ 8: ...' -> 'กฎข้อ 8: ...')."""
+    return re.sub(r'^กฏ\s*', 'กฎข้อ ', reason)
+
+
+def type_label(t):
+    label = TYPE_LABEL_TH.get(t)
+    return f"{t} ({label})" if label else (t or '-')
 
 
 def format_report(results):
-    """Plain-text report for LINE (no Markdown)."""
-    lines = []
+    """Formal plain-text report for LINE (no Markdown, no emoji)."""
+    lines = ["รายงานผลการตรวจสอบ Index Code", ""]
     for i, r in enumerate(results, 1):
-        head = f"{i}. {r['code']}" if len(results) > 1 else r['code']
-        lines.append(head)
-        lines.append(f"ผล: {TYPE_ICON.get(r['TYPE'], '')} {r['TYPE'] or '-'}")
-        if r['TYPE'] not in ('TYPE A',):
-            for reason in r['reasons_th'].split('; '):
-                lines.append(f"- {reason}")
-        lines.append(f"รูปแบบ BIM (BFV): {'ถูก' if r['correct_bim_format'] else 'ไม่ถูก'}")
+        lines.append(f"{i}. รหัส: {r['code']}" if len(results) > 1 else f"รหัส: {r['code']}")
+        lines.append(f"ผลการตรวจสอบ: {type_label(r['TYPE'])}")
+        if r['TYPE'] != 'TYPE A' and r['reasons_th']:
+            lines.append("รายการที่ไม่เป็นไปตามเกณฑ์:")
+            lines += [f"- {reason_text(reason)}" for reason in r['reasons_th'].split('; ')]
+        lines.append(f"รูปแบบ BIM (BFV): {'ถูกต้อง' if r['correct_bim_format'] else 'ไม่ถูกต้อง'}")
         if 'approved' in r:
-            lines.append(f"Asset Type อยู่ใน Approve list: {'ใช่' if r['approved'] else 'ไม่'}")
+            lines.append(f"Asset Type ในรายการที่อนุมัติ: {'อยู่ในรายการ' if r['approved'] else 'ไม่อยู่ในรายการ'}")
         if r.get('category'):
-            lines.append(f"หมวด: {r['category'].strip()}")
+            lines.append(f"หมวดระบบ: {r['category'].strip()}")
         if len(r['parts']) == 7:
-            lines.append("แยกส่วน: " + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
-        for h in r['hints']:
-            lines.append(f"💡 {h}")
+            lines.append("องค์ประกอบรหัส: " + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
+        if r['hints']:
+            lines.append("ข้อเสนอแนะ:")
+            lines += [f"- {h}" for h in r['hints']]
         lines.append("")
-    lines.append("หมายเหตุ: กฎ 9 (Running number ซ้ำ) ต้องตรวจทั้งไฟล์ ตรวจโค้ดเดี่ยวไม่ได้ค่ะ")
+    lines.append("หมายเหตุ: การตรวจสอบรหัสรายตัวไม่ครอบคลุมกฎข้อ 9 (Running Number ซ้ำ) ซึ่งต้องตรวจสอบจากไฟล์ทั้งชุด")
     return "\n".join(lines).strip()
 
 

@@ -94,11 +94,21 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
   TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
   TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
 - ถ้าข้อความมี "[ผลตรวจจากระบบ]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
-- พี่พิมพ์โค้ดมา หรือใช้ /check ตามด้วยโค้ด หนูจะตรวจให้ (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel (.xlsx .xlsm .xls) หรือ CSV มาตรวจทั้งไฟล์ได้
+- ผู้ใช้ตรวจสอบได้โดยพิมพ์ /check ตามด้วยโค้ด (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel (.xlsx .xlsm .xls) หรือ CSV เพื่อตรวจสอบทั้งไฟล์ ในแชทส่วนตัวพิมพ์โค้ดหรือส่งไฟล์ได้ทันที
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
 """
+
+FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วยตรวจสอบข้อมูล Index Code ของโครงการ OneBangkok (OBK) ในกลุ่ม LINE ของทีมงาน
+
+## รูปแบบการสื่อสาร
+- ใช้ภาษาไทยแบบทางการ สุภาพ กระชับ เหมือนเจ้าหน้าที่ผู้เชี่ยวชาญตอบในที่ทำงาน
+- เรียกผู้ใช้ว่า "คุณ" ไม่ใช้คำว่า หนู/พี่ ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ ลงท้ายด้วย "ค่ะ" ได้ตามความเหมาะสม
+- ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
+- ห้ามใช้ Markdown เช่น ** หรือ # หากต้องทำรายการให้ใช้ 1. 2. 3. หรือ "- "
+
+""" + SYSTEM_PROMPT.split("## งานตรวจ Index Code", 1)[1].join(["## งานตรวจ Index Code", ""])
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
@@ -166,7 +176,7 @@ def generate_with_fallback(contents, system_instruction):
             raise
 
 
-def generate_response(chat_id, user_parts, history_text):
+def generate_response(chat_id, user_parts, history_text, formal=False):
     """Ask Gemini for Ani's reply.
 
     user_parts: parts sent to the model for this turn (text and/or image).
@@ -175,7 +185,8 @@ def generate_response(chat_id, user_parts, history_text):
     history = chat_histories[chat_id]
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
 
-    response = generate_with_fallback(contents, SYSTEM_PROMPT.format(now=thai_now()))
+    prompt = FORMAL_SYSTEM_PROMPT if formal else SYSTEM_PROMPT
+    response = generate_with_fallback(contents, prompt.format(now=thai_now()))
     reply = (response.text or "").strip() or "ขอโทษนะคะพี่ หนูคิดคำตอบไม่ออกเลย ลองถามใหม่อีกทีได้ไหมคะ"
 
     remember(chat_id, history_text, reply)
@@ -349,13 +360,13 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
 
     if not obk_files.is_supported(file_name):
         log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
-        send_reply(reply_token, chat_id, f"หนูได้รับไฟล์ {file_name} ค่ะ แต่ตอนนี้หนูตรวจได้แค่ไฟล์ .xlsx .xlsm .xls และ .csv ที่มี Index code นะคะพี่")
+        send_reply(reply_token, chat_id, f"ระบบรองรับเฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี Index Code (ไฟล์ที่ได้รับ: {file_name})")
         return
     if obk_validator.get_master() is None:
-        send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจไฟล์ให้ไม่ได้")
+        send_reply(reply_token, chat_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ Index Code ได้ในขณะนี้")
         return
     if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
-        send_reply(reply_token, chat_id, f"ไฟล์ใหญ่เกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB ค่ะพี่ ลองแบ่งไฟล์แล้วส่งใหม่นะคะ")
+        send_reply(reply_token, chat_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้ง")
         return
 
     if event.get("source", {}).get("type") == "user":
@@ -365,7 +376,7 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
         result, token = obk_files.validate_file(file_name, data)
     except Exception:
         log.exception("File validation failed")
-        send_reply(reply_token, chat_id, f"หนูเปิดหรือตรวจไฟล์ {file_name} ไม่สำเร็จค่ะพี่ ไฟล์อาจเสียหรือมีรหัสผ่าน ลองส่งใหม่อีกทีนะคะ")
+        send_reply(reply_token, chat_id, f"ไม่สามารถเปิดหรือตรวจสอบไฟล์ {file_name} ได้ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาตรวจสอบแล้วส่งใหม่อีกครั้ง")
         return
 
     summary = obk_files.format_summary(result, file_name)
@@ -381,11 +392,11 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
                 links.append(f"- {name}\n{url}")
         if links:
             hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
-            summary += f"\n\nดาวน์โหลดไฟล์ผลตรวจ (ลิงก์ใช้ได้ {hours} ชั่วโมง):\n" + "\n".join(links)
+            summary += f"\n\nดาวน์โหลดไฟล์ผลการตรวจสอบ (ลิงก์มีอายุ {hours} ชั่วโมง)\n" + "\n".join(links)
 
     # Remember the summary so follow-up questions about the file make sense
     with chat_locks[chat_id]:
-        remember(chat_id, f"(พี่ส่งไฟล์ {file_name} มาให้ตรวจ Index code)", summary)
+        remember(chat_id, f"(ผู้ใช้ส่งไฟล์ {file_name} มาตรวจสอบ Index Code)", summary)
     store_chat_history_to_csv(chat_id, user_id, f"[file] {file_name}", summary)
     send_reply(reply_token, chat_id, summary, extra)
 
@@ -418,7 +429,7 @@ def handle_group_event(event, chat_id, user_id, base_url):
     text = message["text"].strip()
     if text.lower() in RESET_COMMANDS:
         chat_histories.pop(chat_id, None)
-        send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันในกลุ่มนี้หมดแล้วค่ะ ✨", mention_user_id=user_id)
+        send_reply(reply_token, chat_id, "ล้างประวัติการสนทนาของกลุ่มนี้เรียบร้อยแล้ว", mention_user_id=user_id)
         return
 
     codes, check_command = extract_codes(text)
@@ -429,8 +440,7 @@ def handle_group_event(event, chat_id, user_id, base_url):
         if file_info:
             return handle_file(event, chat_id, user_id, base_url, message=file_info, mention_user_id=user_id)
         send_reply(reply_token, chat_id,
-                   "พิมพ์ /check ตามด้วย Index code หรือส่งไฟล์ Excel/CSV มาก่อนแล้วพิมพ์ /check ได้เลยค่ะพี่\n"
-                   "เช่น /check C3A-001-ME01-AC-AHUS-000AHU-001",
+                   "วิธีใช้งาน: พิมพ์ /check ตามด้วย Index Code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\nตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001",
                    mention_user_id=user_id)
         return
 
@@ -469,11 +479,11 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
     master = obk_validator.get_master()
     if codes and master is None:
         if check_command:
-            send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจ Index code ให้ไม่ได้")
+            send_reply(reply_token, chat_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ Index Code ได้ในขณะนี้")
             return
         codes = []
     if check_command and not codes:
-        send_reply(reply_token, chat_id, "พิมพ์ /check ตามด้วย Index code ได้เลยค่ะพี่ เช่น\n/check C3A-001-ME01-AC-AHUS-000AHU-001")
+        send_reply(reply_token, chat_id, "วิธีใช้งาน: พิมพ์ /check ตามด้วย Index Code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\nตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001")
         return
     if codes:
         report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes])
@@ -525,21 +535,25 @@ def handle_media(event, chat_id, user_id, base_url):
 
 
 def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=None):
+    formal = mention_user_id is not None        # group replies use the formal tone
     if event.get("source", {}).get("type") == "user":
         show_loading(user_id)
 
     with chat_locks[chat_id]:
         try:
-            reply = generate_response(chat_id, user_parts, history_text)
+            reply = generate_response(chat_id, user_parts, history_text, formal)
         except genai_errors.APIError as e:
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:
-                reply = "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ"
+                reply = ("ขณะนี้มีการใช้งานเกินโควตาของระบบ กรุณาลองใหม่อีกครั้งภายหลัง" if formal
+                         else "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ")
             else:
-                reply = "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ"
+                reply = ("ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง" if formal
+                         else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ")
         except Exception:
             log.exception("Gemini call failed")
-            reply = "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ"
+            reply = ("ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง" if formal
+                     else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ")
         else:
             store_chat_history_to_csv(chat_id, user_id, history_text, reply)
 

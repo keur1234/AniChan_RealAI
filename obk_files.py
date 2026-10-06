@@ -79,36 +79,39 @@ def validate_file(file_name, data):
 def format_summary(result, file_name):
     """Plain-text summary for LINE (no Markdown)."""
     if result.get('skipped'):
-        msg = [f"ไฟล์ {file_name} ตรวจไม่ได้ค่ะพี่: {result['skipped']}"]
+        msg = [f"ไม่สามารถตรวจสอบไฟล์ {file_name} ได้: {result['skipped']}"]
         if result.get('columns'):
-            msg.append("คอลัมน์ที่หนูเจอ: " + ", ".join(result['columns'][:15]))
-            msg.append("หนูหาคอลัมน์ชื่อ Asset ID, IndexCode, Index, Equipment ID, Name ฯลฯ ลองเปลี่ยนชื่อหัวคอลัมน์แล้วส่งใหม่นะคะ")
+            msg.append("คอลัมน์ที่พบในไฟล์: " + ", ".join(result['columns'][:15]))
+            msg.append("ระบบรองรับคอลัมน์ชื่อ Asset ID, IndexCode, Index, Equipment ID, Name เป็นต้น "
+                       "กรุณาตรวจสอบชื่อหัวคอลัมน์แล้วส่งไฟล์อีกครั้ง")
         return "\n".join(msg)
 
     lines = [
-        f"ผลตรวจไฟล์ {file_name}",
-        f"คอลัมน์ที่ใช้: {result['column_used']}",
-        f"จำนวนแถว: {result['records']:,} (Asset ID ไม่ซ้ำ {result['unique_assets']:,})",
+        "รายงานผลการตรวจสอบ Index Code",
+        f"ไฟล์: {file_name}",
+        f"คอลัมน์ที่ใช้ตรวจสอบ: {result['column_used']}",
+        f"จำนวนรายการ: {result['records']:,} รายการ (Asset ID ไม่ซ้ำ {result['unique_assets']:,} รายการ)",
         "",
-        f"QLT (TYPE A): {result['QLT_type_a']['count']:,} ({result['QLT_type_a']['pct']}%)",
-        f"BFV (รูปแบบ BIM ถูก): {result['BFV_correct_format']['count']:,} ({result['BFV_correct_format']['pct']}%)",
-        f"Asset Type อยู่ใน Approve list: {result['approved_asset_type']['count']:,} ({result['approved_asset_type']['pct']}%)",
+        "สรุปตัวชี้วัด",
+        f"- QLT (TYPE A): {result['QLT_type_a']['count']:,} รายการ ({result['QLT_type_a']['pct']}%)",
+        f"- BFV (รูปแบบ BIM ถูกต้อง): {result['BFV_correct_format']['count']:,} รายการ ({result['BFV_correct_format']['pct']}%)",
+        f"- Asset Type ในรายการที่อนุมัติ: {result['approved_asset_type']['count']:,} รายการ ({result['approved_asset_type']['pct']}%)",
         "",
-        "แยกตาม TYPE:",
+        "จำแนกตามผลการตรวจสอบ",
     ]
     for t, v in result['types'].items():
         if v['count']:
-            lines.append(f"- {obk_validator.TYPE_ICON.get(t, '')} {t}: {v['count']:,} ({v['pct']}%)")
-    lines.append(f"Asset ID ซ้ำข้ามชีท: {result['duplicates']:,}")
+            lines.append(f"- {obk_validator.type_label(t)}: {v['count']:,} รายการ ({v['pct']}%)")
+    lines.append(f"- Asset ID ซ้ำข้ามชีท: {result['duplicates']:,} รายการ")
 
     if result['top_rules_unique_assets']:
-        lines += ["", "กฎที่ผิดบ่อยที่สุด (นับ Asset ID ไม่ซ้ำ):"]
-        lines += [f"- กฎ {rule}: {n:,}" for rule, n in result['top_rules_unique_assets'][:5]]
+        lines += ["", "กฎที่พบข้อผิดพลาดมากที่สุด (นับตาม Asset ID ไม่ซ้ำ)"]
+        lines += [f"- กฎข้อ {rule}: {n:,} รายการ" for rule, n in result['top_rules_unique_assets'][:5]]
     if len(result['worst_sheets']) > 1:
-        lines += ["", "ชีทที่ TYPE A น้อยสุด:"]
-        lines += [f"- {w['Source Sheet']}: {w['TYPE A %']}% จาก {w['TOTAL']:,}" for w in result['worst_sheets'][:3]]
+        lines += ["", "ชีทที่มีสัดส่วน TYPE A ต่ำที่สุด"]
+        lines += [f"- {w['Source Sheet']}: {w['TYPE A %']}% จาก {w['TOTAL']:,} รายการ" for w in result['worst_sheets'][:3]]
     if result['sample_failures']:
-        lines += ["", "ตัวอย่างที่ไม่ผ่าน:"]
+        lines += ["", "ตัวอย่างรายการที่ไม่ผ่านเกณฑ์"]
         for s in result['sample_failures'][:5]:
-            lines.append(f"- {s['Asset ID']} ({s['TYPE']}): {s['validation_result_thai'].split('; ')[0]}")
+            lines.append(f"- {s['Asset ID']} ({s['TYPE']}): {obk_validator.reason_text(s['validation_result_thai'].split('; ')[0])}")
     return "\n".join(lines)
