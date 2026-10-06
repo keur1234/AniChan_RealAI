@@ -93,35 +93,46 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 
 ## รูปแบบข้อความ (LINE แสดง Markdown ไม่ได้)
 - ห้ามใช้ Markdown เช่น **ตัวหนา**, # หัวข้อ, ตาราง หรือ ```
-- ถ้าต้องทำรายการ ให้ใช้ตัวเลข 1. 2. 3. หรือ "- " ขึ้นบรรทัดใหม่
+- ถ้าต้องแจกแจงเป็นข้อ ให้ใช้ตัวเลข 1. 2. 3. หรือ "- " ขึ้นบรรทัดใหม่
 - ใช้อิโมจิเท่าที่จำเป็น ไม่เกิน 2 ตัวต่อข้อความ และเว้นวรรคระหว่างข้อความกับอิโมจิ
 
-## งานตรวจ index code ของ OBK
-- index code มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
+## งาน validation index codes ของ OBK
+- index codes มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
   Component(3)-Floor(3)-Space(4)-Main System(2)-Sub System(4)-Equipment(6)-Running No.(3)
   เช่น C3A-001-ME01-AC-AHUS-000AHU-001
-- ผลตรวจ: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
+- Validation result: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
   TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
   TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
-- ใช้คำว่า "index code" เสมอ (ไม่ใช้ Asset ID, Index Code, รหัสทรัพย์สิน) และเรียกโครงการว่า "OBK" เสมอ (ไม่ใช้ One Bangkok / OneBangkok)
+
+## ศัพท์และมาตรฐานของโครงการ OBK (ต้องใช้ให้ตรงทุกครั้ง)
+- ใช้คำว่า "index codes" เท่านั้น ห้ามใช้ index name, Asset ID, รหัส, รายการ หรือคำอื่นแทน
+- ใช้คำว่า "validation" สำหรับการตรวจ index codes เท่านั้น เช่น "ผล validation", "validate" ไม่ใช้คำว่า ตรวจสอบ
+- ผลของแต่ละ index code เรียกว่า "Validation result" เช่น Validation result: TYPE A
+- เรียกโครงการว่า "OBK" เสมอ ไม่ใช้ One Bangkok / OneBangkok
+- ไม่นำคำศัพท์ส่วนตัวมาใช้ ใช้ศัพท์ของโครงการ OBK เท่านั้น
+- เมื่อสรุปผล ใช้รูปแบบที่ตกลงไว้เสมอ ตามลำดับ:
+  1. index codes ทั้งหมด: จำนวน
+  2. Red Flag: index codes ซ้ำ หรือ Running Number ซ้ำ ต้องรายงานเป็น Red Flag อย่างชัดเจน ถ้าไม่พบให้เขียนว่า ไม่พบ Red Flag
+  3. Validation result: แต่ละ TYPE เป็นสัดส่วน เช่น "TYPE A: 120 index codes 85.71%" ไม่มีวงเล็บ ใช้เปอร์เซ็นต์ทศนิยม 2 ตำแหน่งเท่านั้น
+- กระชับ ไม่ซ้ำซ้อน และเป็นมืออาชีพ
 - คุณแก้ไขรูปแบบรายงาน ข้อความของระบบ การตั้งค่า หรือโค้ดของบอทไม่ได้ ห้ามบอกว่า "ได้แก้ไข/อัปเดตแล้ว" ถ้าผู้ใช้ขอให้เปลี่ยน
   ให้แจ้งตรงๆ ว่าต้องให้ผู้ดูแลระบบปรับ แล้วสรุปสิ่งที่ผู้ใช้ต้องการให้ชัดเจน
-- ถ้าข้อความมี "[ผลตรวจจากระบบ / system validation result]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
-- ผู้ใช้ตรวจสอบได้โดยพิมพ์ /check ตามด้วยโค้ด (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel (.xlsx .xlsm .xls) หรือ CSV เพื่อตรวจสอบทั้งไฟล์ ในแชทส่วนตัวพิมพ์โค้ดหรือส่งไฟล์ได้ทันที
+- ถ้าข้อความมี "[ผล validation จากระบบ / system validation result]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
+- ผู้ใช้ validate ได้โดยพิมพ์ /check ตามด้วย index codes ครั้งละไม่เกิน 10 index codes หรือส่งไฟล์ Excel .xlsx .xlsm .xls หรือ CSV เพื่อ validate ทั้งไฟล์ ในแชทส่วนตัวพิมพ์ index codes หรือส่งไฟล์ได้ทันที
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
 """
 
-FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วยตรวจสอบ index code ของโครงการ OBK ในกลุ่ม LINE ของทีมงาน
+FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วย validation index codes ของโครงการ OBK ในกลุ่ม LINE ของทีมงาน
 
 ## รูปแบบการสื่อสาร
 - ใช้ภาษาแบบทางการ สุภาพ กระชับ เหมือนเจ้าหน้าที่ผู้เชี่ยวชาญตอบในที่ทำงาน
-- ภาษาไทย: เรียกผู้ใช้ว่า "คุณ" ไม่ใช้คำว่า หนู/พี่ ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ ลงท้ายด้วย "ค่ะ" ได้ตามความเหมาะสม
+- ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ
 - ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
-- ห้ามใช้ Markdown เช่น ** หรือ # หากต้องทำรายการให้ใช้ 1. 2. 3. หรือ "- "
+- ห้ามใช้ Markdown เช่น ** หรือ # หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
 
-""" + LANGUAGE_RULE + "\n" + SYSTEM_PROMPT.split("## งานตรวจ index code", 1)[1].join(["## งานตรวจ index code", ""])
+""" + LANGUAGE_RULE + "\n" + SYSTEM_PROMPT.split("## งาน validation index codes", 1)[1].join(["## งาน validation index codes", ""])
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
@@ -155,15 +166,15 @@ def detect_language(text):
 
 def check_help(user_id):
     return tr(user_id,
-              "วิธีใช้งาน: พิมพ์ /check ตามด้วย index code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\n"
+              "วิธีใช้งาน: พิมพ์ /check ตามด้วย index codes หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check ค่ะ\n"
               "ตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001",
-              "How to use: type /check followed by an index code, or send an Excel/CSV file and then type /check\n"
+              "How to use: type /check followed by index codes, or send an Excel/CSV file and then type /check\n"
               "Example: /check C3A-001-ME01-AC-AHUS-000AHU-001")
 
 
 def no_reference_text(user_id):
-    return tr(user_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ index code ได้ในขณะนี้",
-              "The reference file (obk_ref_bundle.json) is not available, so index codes cannot be validated right now.")
+    return tr(user_id, "หนูยังไม่พบไฟล์อ้างอิง obk_ref_bundle.json จึงยังไม่สามารถ validate index codes ได้ค่ะ",
+              "I can't find the reference file obk_ref_bundle.json, so I can't validate index codes right now.")
 
 
 def tr(user_id, th, en):
@@ -239,7 +250,7 @@ def generate_response(chat_id, user_parts, history_text, formal=False, user_id="
 
     prompt = FORMAL_SYSTEM_PROMPT if formal else SYSTEM_PROMPT
     response = generate_with_fallback(contents, prompt.format(now=thai_now()))
-    reply = (response.text or "").strip() or tr(user_id, "ขออภัย ไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้ง",
+    reply = (response.text or "").strip() or tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
                                                    "Sorry, I couldn't come up with an answer. Please try asking again.")
 
     remember(chat_id, history_text, reply)
@@ -413,14 +424,14 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
 
     if not obk_files.is_supported(file_name):
         log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
-        send_reply(reply_token, chat_id, tr(user_id, f"ระบบรองรับเฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี index code (ไฟล์ที่ได้รับ: {file_name})",
-                                             f"Only .xlsx, .xlsm, .xls and .csv files containing index codes are supported (received: {file_name})"))
+        send_reply(reply_token, chat_id, tr(user_id, f"หนู validate ได้เฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี index codes ค่ะ ไฟล์ที่ได้รับ: {file_name}",
+                                             f"I can only validate .xlsx, .xlsm, .xls and .csv files containing index codes. File received: {file_name}"))
         return
     if obk_validator.get_master() is None:
         send_reply(reply_token, chat_id, no_reference_text(user_id))
         return
     if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
-        send_reply(reply_token, chat_id, tr(user_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้ง",
+        send_reply(reply_token, chat_id, tr(user_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB ค่ะ กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้งค่ะ",
                                              f"The file is larger than {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB. Please split it and send it again."))
         return
 
@@ -431,8 +442,8 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
         result, token = obk_files.validate_file(file_name, data)
     except Exception:
         log.exception("File validation failed")
-        send_reply(reply_token, chat_id, tr(user_id, f"ไม่สามารถเปิดหรือตรวจสอบไฟล์ {file_name} ได้ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาตรวจสอบแล้วส่งใหม่อีกครั้ง",
-                                             f"Unable to open or validate {file_name}. The file may be corrupted or password-protected. Please check it and send it again."))
+        send_reply(reply_token, chat_id, tr(user_id, f"หนูไม่สามารถเปิดไฟล์ {file_name} เพื่อ validate ได้ค่ะ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาแก้ไขแล้วส่งใหม่อีกครั้งค่ะ",
+                                             f"I couldn't open {file_name} to validate it. The file may be corrupted or password-protected. Please fix it and send it again."))
         return
 
     summary = obk_files.format_summary(result, file_name, user_langs.get(user_id, "th"))
@@ -448,12 +459,12 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
                 links.append(f"- {name}\n{url}")
         if links:
             hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
-            summary += tr(user_id, f"\n\nดาวน์โหลดไฟล์ผลการตรวจสอบ (ลิงก์มีอายุ {hours} ชั่วโมง)\n",
-                          f"\n\nDownload the validation results (links expire in {hours} hours)\n") + "\n".join(links)
+            summary += tr(user_id, f"\n\nดาวน์โหลดไฟล์ผล validation ลิงก์มีอายุ {hours} ชั่วโมง\n",
+                          f"\n\nDownload the validation results, links expire in {hours} hours\n") + "\n".join(links)
 
     # Remember the summary so follow-up questions about the file make sense
     with chat_locks[chat_id]:
-        remember(chat_id, f"(ผู้ใช้ส่งไฟล์ {file_name} มาตรวจสอบ index code)", summary)
+        remember(chat_id, f"(ผู้ใช้ส่งไฟล์ {file_name} มา validate index codes)", summary)
     store_chat_history_to_csv(chat_id, user_id, f"[file] {file_name}", summary)
     send_reply(reply_token, chat_id, summary, extra)
 
@@ -488,7 +499,7 @@ def handle_group_event(event, chat_id, user_id, base_url):
     text = message["text"].strip()
     if text.lower() in RESET_COMMANDS:
         chat_histories.pop(chat_id, None)
-        send_reply(reply_token, chat_id, tr(user_id, "ล้างประวัติการสนทนาของกลุ่มนี้เรียบร้อยแล้ว", "This group's conversation history has been cleared."), mention_user_id=user_id)
+        send_reply(reply_token, chat_id, tr(user_id, "หนูล้างประวัติการสนทนาของกลุ่มนี้แล้วค่ะ", "This group's conversation history has been cleared."), mention_user_id=user_id)
         return
 
     codes, check_command = extract_codes(text)
@@ -566,7 +577,7 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             store_chat_history_to_csv(chat_id, user_id, text, report)
             send_reply(reply_token, chat_id, report)
             return
-        text = f"{text}\n\n[ผลตรวจจากระบบ / system validation result]\n{report}"
+        text = f"{text}\n\n[ผล validation จากระบบ / system validation result]\n{report}"
     user_parts = [types.Part.from_text(text=text)]
     history_text = text
     return ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id)
@@ -607,9 +618,9 @@ def handle_media(event, chat_id, user_id, base_url):
 
 def system_error_text(user_id, formal):
     return tr(user_id,
-              "ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง" if formal
+              "ขออภัยค่ะ หนูขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ" if formal
               else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ",
-              "The system is temporarily unavailable. Please try again.")
+              "Sorry, I'm temporarily unavailable. Please try again.")
 
 
 def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=None):
@@ -624,9 +635,9 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:
                 reply = tr(user_id,
-                           "ขณะนี้มีการใช้งานเกินโควตาของระบบ กรุณาลองใหม่อีกครั้งภายหลัง" if formal
+                           "ขออภัยค่ะ ขณะนี้หนูใช้งานเกินโควตาแล้ว กรุณาลองใหม่อีกครั้งภายหลังค่ะ" if formal
                            else "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ",
-                           "The usage quota has been reached. Please try again later.")
+                           "Sorry, I've reached my usage quota. Please try again later.")
             else:
                 reply = system_error_text(user_id, formal)
         except Exception:

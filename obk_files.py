@@ -89,52 +89,24 @@ SKIP_REASONS_EN = {
 
 
 def format_summary(result, file_name, lang='th'):
-    """Formal plain-text summary for LINE (no Markdown)."""
+    """File summary in the agreed OBK format: total, Red Flag, Validation result."""
     t = lambda th, en: obk_validator._t(lang, th, en)
-    cnt = lambda n: f"{n:,} รายการ" if lang == 'th' else f"{n:,}"
     if result.get('skipped'):
-        reason = (result['skipped'].replace('ไม่พบคอลัมน์ Asset ID', 'ไม่พบคอลัมน์ index code')
-                  .replace('ไม่มี Asset ID ที่ใช้ได้', 'ไม่มี index code ที่ใช้ได้')
+        reason = (result['skipped'].replace('ไม่พบคอลัมน์ Asset ID', 'ไม่พบคอลัมน์ index codes')
+                  .replace('ไม่มี Asset ID ที่ใช้ได้', 'ไม่มี index codes ที่ใช้ได้')
                   if lang == 'th' else SKIP_REASONS_EN.get(result['skipped'], result['skipped']))
-        msg = [t(f"ไม่สามารถตรวจสอบไฟล์ {file_name} ได้: {reason}", f"Unable to validate {file_name}: {reason}")]
+        msg = [t(f"หนูไม่สามารถ validate ไฟล์ {file_name} ได้ค่ะ: {reason}", f"I couldn't validate {file_name}: {reason}")]
         if result.get('columns'):
             msg.append(t("คอลัมน์ที่พบในไฟล์: ", "Columns found: ") + ", ".join(result['columns'][:15]))
-            msg.append(t("ระบบอ่าน index code จากคอลัมน์ชื่อ Asset ID, IndexCode, Index, Equipment ID, Name เป็นต้น "
-                         "กรุณาตรวจสอบชื่อหัวคอลัมน์แล้วส่งไฟล์อีกครั้ง",
-                         "Index codes are read from columns named Asset ID, IndexCode, Index, Equipment ID or Name. "
-                         "Please check the header row and send the file again."))
+            msg.append(t("หนูอ่าน index codes จากคอลัมน์ชื่อ Asset ID, IndexCode, Index, Equipment ID หรือ Name "
+                         "กรุณาแก้ชื่อหัวคอลัมน์แล้วส่งไฟล์อีกครั้งค่ะ",
+                         "I read index codes from columns named Asset ID, IndexCode, Index, Equipment ID or Name. "
+                         "Please fix the header row and send the file again."))
         return "\n".join(msg)
 
-    pct = lambda k: f"{cnt(result[k]['count'])} ({result[k]['pct']}%)"
-    lines = [
-        t("รายงานผลการตรวจสอบ index code", "Index code validation report"),
-        t("ไฟล์", "File") + f": {file_name}",
-        t("คอลัมน์ที่ใช้ตรวจสอบ", "Column checked") + f": {result['column_used']}",
-        t(f"จำนวนรายการ: {result['records']:,} รายการ (index code ไม่ซ้ำ {result['unique_assets']:,} รายการ)",
-          f"Records: {result['records']:,} ({result['unique_assets']:,} unique index codes)"),
-        "",
-        t("สรุปตัวชี้วัด", "Key metrics"),
-        f"- QLT (TYPE A): {pct('QLT_type_a')}",
-        t("- BFV (รูปแบบ BIM ถูกต้อง): ", "- BFV (correct BIM format): ") + pct('BFV_correct_format'),
-        t("- Asset Type ในรายการที่อนุมัติ: ", "- Asset Type in approved list: ") + pct('approved_asset_type'),
-        "",
-        t("จำแนกตามผลการตรวจสอบ", "Breakdown by result"),
-    ]
-    for typ, v in result['types'].items():
-        if v['count']:
-            lines.append(f"- {obk_validator.type_label(typ, lang)}: {cnt(v['count'])} ({v['pct']}%)")
-    lines.append(t("- index code ซ้ำข้ามชีท: ", "- Index codes duplicated across sheets: ") + cnt(result['duplicates']))
-
-    if result['top_rules_unique_assets']:
-        lines += ["", t("กฎที่พบข้อผิดพลาดมากที่สุด (นับตาม index code ไม่ซ้ำ)", "Most frequent rule failures (unique index codes)")]
-        lines += [t(f"- กฎข้อ {rule}", f"- Rule {rule}") + f": {cnt(n)}" for rule, n in result['top_rules_unique_assets'][:5]]
-    if len(result['worst_sheets']) > 1:
-        lines += ["", t("ชีทที่มีสัดส่วน TYPE A ต่ำที่สุด", "Sheets with the lowest TYPE A rate")]
-        lines += [f"- {w['Source Sheet']}: {w['TYPE A %']}% " + t("จาก", "of") + f" {cnt(w['TOTAL'])}"
-                  for w in result['worst_sheets'][:3]]
-    if result['sample_failures']:
-        lines += ["", t("ตัวอย่าง index code ที่ไม่ผ่านเกณฑ์", "Examples of failed index codes")]
-        for s in result['sample_failures'][:5]:
-            reason = s['validation_result_thai'] if lang == 'th' else s.get('validation_result', s['validation_result_thai'])
-            lines.append(f"- {s['Asset ID']} ({s['TYPE']}): {obk_validator.reason_text(reason.split('; ')[0])}")
+    type_counts = {typ: v['count'] for typ, v in result['types'].items()}
+    lines = [t("ผล validation index codes", "Index codes validation result"), t("ไฟล์: ", "File: ") + file_name]
+    dup_lines = [t(f"  {code} ซ้ำ {n} ครั้ง", f"  {code} appears {n} times") for code, n in result.get('duplicate_codes', [])]
+    lines += obk_validator.summary_lines(result['records'], result.get('duplicate_codes_total', 0), dup_lines,
+                                         type_counts.get('TYPE B', 0), type_counts, lang)
     return "\n".join(lines)

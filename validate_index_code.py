@@ -404,6 +404,8 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet'):
         'approved_asset_type': {'count': int((review['Approved'] == 'yes').sum()), 'pct': pct((review['Approved'] == 'yes').sum())},
         'types': {t: {'count': int(vc.get(t, 0)), 'pct': pct(vc.get(t, 0))} for t in all_types(review)},
         'duplicates': len(dups), 'dup_mode': dup_mode, 'room': room,
+        'duplicate_codes_total': int((dup['Dup Count'] > 1).sum()),
+        'duplicate_codes': dup[dup['Dup Count'] > 1].sort_values('Dup Count', ascending=False)[['Asset ID', 'Dup Count']].head(10).values.tolist(),
         'top_rules_unique_assets': rule_counter.most_common(8),
         'worst_sheets': worst[['Source Sheet', 'TYPE A %', 'TOTAL']].to_dict('records'),
         'sample_failures': asset[~asset['TYPE'].isin(['TYPE A', 'N/A'])][['Asset ID', 'TYPE', 'validation_result', 'validation_result_thai']].head(10).to_dict('records'),

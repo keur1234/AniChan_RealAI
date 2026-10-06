@@ -151,8 +151,8 @@ def apply_override(code, t):
 
 
 def find_codes(text):
-    """Pull index-code-looking tokens out of free text."""
-    return list(dict.fromkeys(m.group(0) for m in CODE_CANDIDATE_RE.finditer(text)))
+    """Pull index-code-looking tokens out of free text (repeats kept so duplicates can be flagged)."""
+    return [m.group(0) for m in CODE_CANDIDATE_RE.finditer(text)]
 
 
 def check_code(code, md):
@@ -180,8 +180,8 @@ def check_code(code, md):
     if code != code.upper() and t != 'TYPE A':
         upper_type = apply_override(code.upper(), validate_index_code(code.upper(), md)[2])
         if upper_type == 'TYPE A':
-            result['hints'].append((f"หากแก้ไขเป็นตัวพิมพ์ใหญ่ ({code.upper()}) index code นี้จะผ่านเกณฑ์ TYPE A",
-                                    f"In upper case ({code.upper()}) this index code passes as TYPE A"))
+            result['hints'].append((f"หากแก้เป็นตัวพิมพ์ใหญ่ {code.upper()} จะได้ Validation result TYPE A",
+                                    f"In upper case, {code.upper()} gets Validation result TYPE A"))
     if len(parts) >= 3 and '4' in rules:
         loc = '-'.join(parts[:3])
         close = difflib.get_close_matches(loc, md['_locations'], n=3, cutoff=0.7)
@@ -191,60 +191,76 @@ def check_code(code, md):
     return result
 
 
-TYPE_LABEL_TH = {
-    'TYPE A': 'ผ่านเกณฑ์',
-    'TYPE B': 'Running Number ซ้ำ',
-    'TYPE B OR C': 'ต้องตรวจสอบ Equipment / Asset Type',
-    'TYPE C': 'ไม่ผ่านเกณฑ์บังคับ',
-    'N/A': 'ข้อยกเว้น',
-}
-TYPE_LABEL_EN = {
-    'TYPE A': 'Passed',
-    'TYPE B': 'Duplicate running number',
-    'TYPE B OR C': 'Equipment / Asset Type needs review',
-    'TYPE C': 'Failed mandatory rules',
-    'N/A': 'Exception',
-}
-
-
 def reason_text(reason):
-    """Display form of a rule message ('กฏ 8: ...' -> 'กฎข้อ 8: ...')."""
-    return re.sub(r'^กฏ\s*', 'กฎข้อ ', reason)
+    """Display form of a rule message: 'กฎข้อ 8: ...', no parentheses."""
+    reason = re.sub(r'^กฏ\s*', 'กฎข้อ ', reason)
+    return re.sub(r'\s*\(([^)]*)\)', r' \1', reason).strip()
 
 
-def type_label(t, lang='th'):
-    label = (TYPE_LABEL_TH if lang == 'th' else TYPE_LABEL_EN).get(t)
-    return f"{t} ({label})" if label else (t or '-')
+def pct_text(n, total):
+    return f"{(n / total * 100 if total else 0):.2f}%"
+
+
+TYPE_ORDER = ['TYPE A', 'TYPE B', 'TYPE B OR C', 'TYPE C', 'N/A']
+
+
+def summary_lines(total, dup_count, dup_lines, running_dup_count, type_counts, lang='th'):
+    """The agreed summary: total index codes, Red Flag, Validation result."""
+    lines = [_t(lang, f"index codes ทั้งหมด: {total:,}", f"Total index codes: {total:,}"), "", "Red Flag"]
+    if dup_count:
+        lines.append(_t(lang, f"- พบ index codes ซ้ำ: {dup_count:,} index codes",
+                        f"- Duplicate index codes: {dup_count:,} index codes"))
+        lines += dup_lines
+    if running_dup_count:
+        lines.append(_t(lang, f"- พบ Running Number ซ้ำ TYPE B: {running_dup_count:,} index codes",
+                        f"- Duplicate running numbers TYPE B: {running_dup_count:,} index codes"))
+    if not dup_count and not running_dup_count:
+        lines.append(_t(lang, "- ไม่พบ Red Flag", "- No Red Flag found"))
+    lines += ["", "Validation result"]
+    order = TYPE_ORDER + [t for t in type_counts if t not in TYPE_ORDER]
+    for typ in order:
+        n = type_counts.get(typ, 0)
+        if n:
+            lines.append(f"- {typ}: {n:,} index codes {pct_text(n, total)}")
+    return lines
 
 
 def format_report(results, lang='th'):
-    """Formal plain-text report for LINE (no Markdown, no emoji)."""
-    lines = [_t(lang, "รายงานผลการตรวจสอบ index code", "Index code validation report"), ""]
-    code_label = "Index code"
-    for i, r in enumerate(results, 1):
-        lines.append(f"{i}. {code_label}: {r['code']}" if len(results) > 1 else f"{code_label}: {r['code']}")
-        lines.append(_t(lang, "ผลการตรวจสอบ", "Result") + f": {type_label(r['TYPE'], lang)}")
+    """Report for index codes typed in chat, in the agreed OBK format (no Markdown, no parentheses)."""
+    from collections import Counter
+    total = len(results)
+    seen = Counter(r['code'] for r in results)
+    dup_codes = [c for c, n in seen.items() if n > 1]
+    type_counts = Counter(r['TYPE'] or '-' for r in results)
+
+    lines = [_t(lang, "ผล validation index codes", "Index codes validation result")]
+    dup_lines = [_t(lang, f"  {c} ซ้ำ {seen[c]} ครั้ง", f"  {c} appears {seen[c]} times") for c in dup_codes]
+    lines += summary_lines(total, len(dup_codes), dup_lines, 0, type_counts, lang)
+    lines += ["", _t(lang, "รายละเอียด", "Details")]
+    unique = list({r['code']: r for r in results}.values())
+    for i, r in enumerate(unique, 1):
+        lines.append(f"{i}. {r['code']}")
+        lines.append(f"Validation result: {r['TYPE'] or '-'}")
         reasons = r['reasons_th'] if lang == 'th' else r['reasons_en']
         if r['TYPE'] != 'TYPE A' and reasons:
-            lines.append(_t(lang, "รายการที่ไม่เป็นไปตามเกณฑ์:", "Issues found:"))
+            lines.append(_t(lang, "กฎที่ไม่ผ่าน:", "Failed rules:"))
             lines += [f"- {reason_text(reason)}" for reason in reasons.split('; ')]
-        lines.append(_t(lang, "รูปแบบ BIM (BFV): ", "BIM format (BFV): ")
-                     + (_t(lang, "ถูกต้อง", "Correct") if r['correct_bim_format'] else _t(lang, "ไม่ถูกต้อง", "Incorrect")))
+        lines.append(_t(lang, "รูปแบบ BIM BFV: ", "BIM format BFV: ")
+                     + (_t(lang, "ถูกต้อง", "correct") if r['correct_bim_format'] else _t(lang, "ไม่ถูกต้อง", "incorrect")))
         if 'approved' in r:
-            lines.append(_t(lang, "Asset Type ในรายการที่อนุมัติ: ", "Asset Type in approved list: ")
-                         + (_t(lang, "อยู่ในรายการ", "Yes") if r['approved'] else _t(lang, "ไม่อยู่ในรายการ", "No")))
+            lines.append(_t(lang, "Asset Type ใน approved list: ", "Asset Type in approved list: ")
+                         + (_t(lang, "อยู่", "yes") if r['approved'] else _t(lang, "ไม่อยู่", "no")))
         if r.get('category'):
-            lines.append(_t(lang, "หมวดระบบ", "System category") + f": {r['category'].strip()}")
+            lines.append(_t(lang, "หมวดระบบ: ", "System category: ") + r['category'].strip())
         if len(r['parts']) == 7:
-            lines.append(_t(lang, "องค์ประกอบ index code: ", "Index code parts: ")
-                         + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
+            lines.append(_t(lang, "องค์ประกอบ: ", "Parts: ") + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
         if r['hints']:
             lines.append(_t(lang, "ข้อเสนอแนะ:", "Suggestions:"))
             lines += [f"- {h[0] if lang == 'th' else h[1]}" for h in r['hints']]
         lines.append("")
     lines.append(_t(lang,
-                    "หมายเหตุ: การตรวจสอบ index code รายตัวไม่ครอบคลุมกฎข้อ 9 (Running Number ซ้ำ) ซึ่งต้องตรวจสอบจากไฟล์ทั้งชุด",
-                    "Note: checking single index codes does not cover Rule 9 (duplicate running number), which needs the whole file."))
+                    "หมายเหตุ: validation index codes รายตัวไม่ครอบคลุมกฎข้อ 9 Running Number ซ้ำ ซึ่งต้อง validate จากไฟล์ทั้งชุด",
+                    "Note: validating single index codes does not cover Rule 9 duplicate running numbers, which needs the whole file."))
     return "\n".join(lines).strip()
 
 
