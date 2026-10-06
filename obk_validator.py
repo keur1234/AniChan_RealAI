@@ -216,7 +216,12 @@ def get_master():
     """Load the reference bundle once; None if it isn't configured."""
     global _master
     if _master is None:
-        path = os.getenv("OBK_BUNDLE_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "obk_ref_bundle.json")
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.getenv("OBK_BUNDLE_PATH") or "obk_ref_bundle.json"
+        # A relative path may be relative to where python was started or to the project folder
+        if not os.path.isabs(path) and not os.path.isfile(path):
+            path = os.path.join(app_dir, path)
+        path = os.path.abspath(path)
         if os.path.isfile(path):
             _master = load_master(path)
         else:
