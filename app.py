@@ -669,4 +669,5 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(port=8080, debug=True)
+    # Debug mode auto-restarts on code changes and exposes the Werkzeug debugger; keep it opt-in
+    app.run(port=int(os.getenv("PORT", "8080")), debug=os.getenv("FLASK_DEBUG") == "1")

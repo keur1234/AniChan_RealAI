@@ -4,7 +4,6 @@ import re
 import secrets
 import shutil
 import tempfile
-import threading
 import time
 
 import obk_validator
@@ -25,9 +24,9 @@ try:
 except ImportError:
     pass
 
-# token -> (job_dir, {filename: path}, expires_at)
-_downloads = {}
-_lock = threading.Lock()
+# Each job lives in WORK_ROOT/<random token>/ on disk, so download links keep
+# working after the bot restarts. Jobs older than the TTL are deleted.
+TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{16,64}$')
 
 
 def is_supported(file_name):
@@ -40,20 +39,29 @@ def safe_name(file_name):
 
 
 def _cleanup_expired():
-    now = time.time()
-    with _lock:
-        expired = [t for t, (_, _, exp) in _downloads.items() if exp < now]
-        for t in expired:
-            job_dir, _, _ = _downloads.pop(t)
-            shutil.rmtree(job_dir, ignore_errors=True)
+    if not os.path.isdir(WORK_ROOT):
+        return
+    cutoff = time.time() - DOWNLOAD_TTL_SECONDS
+    for token in os.listdir(WORK_ROOT):
+        job_dir = os.path.join(WORK_ROOT, token)
+        try:
+            if os.path.getmtime(job_dir) < cutoff:
+                shutil.rmtree(job_dir, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def get_download(token, file_name):
-    with _lock:
-        entry = _downloads.get(token)
-    if not entry or entry[2] < time.time():
+    """Path of an output file of a job, or None if it doesn't exist or has expired."""
+    if not TOKEN_RE.match(token) or os.path.basename(file_name) != file_name:
         return None
-    return entry[1].get(file_name)
+    out_dir = os.path.join(WORK_ROOT, token, "out")
+    if not os.path.isdir(out_dir) or os.path.getmtime(os.path.join(WORK_ROOT, token)) < time.time() - DOWNLOAD_TTL_SECONDS:
+        return None
+    for root, _, files in os.walk(out_dir):
+        if file_name in files:
+            return os.path.join(root, file_name)
+    return None
 
 
 def validate_file(file_name, data):
@@ -70,9 +78,6 @@ def validate_file(file_name, data):
         f.write(data)
 
     result = vic.process_file(path, obk_validator.get_master(), os.path.join(job_dir, "out"), room=True, dup_mode='sheet')
-    files = {os.path.basename(p): p for p in result.get('outputs', [])}
-    with _lock:
-        _downloads[token] = (job_dir, files, time.time() + DOWNLOAD_TTL_SECONDS)
     return result, token
 
 
