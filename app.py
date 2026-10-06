@@ -14,16 +14,21 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, abort, request
+from flask import Flask, abort, request, send_file
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+from urllib.parse import quote
+from werkzeug.middleware.proxy_fix import ProxyFix
 
+import obk_files
 import obk_validator
 
 load_dotenv()
 
 app = Flask(__name__)
+# Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("anichan")
 
@@ -36,6 +41,8 @@ MAX_TURNS = int(os.getenv("MAX_TURNS", "20"))
 # Let Ani look things up on Google for up-to-date answers
 USE_GOOGLE_SEARCH = os.getenv("USE_GOOGLE_SEARCH", "1") == "1"
 CHAT_LOG_FILE = os.getenv("CHAT_LOG_FILE", "chat_history.csv")
+# Public https URL of this server, used for download links (auto-detected from the webhook if empty)
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
@@ -81,7 +88,7 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
   TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
   TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
 - ถ้าข้อความมี "[ผลตรวจจากระบบ]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
-- พี่พิมพ์โค้ดมา หรือใช้ /check ตามด้วยโค้ด หนูจะตรวจให้ (ครั้งละไม่เกิน 10 โค้ด)
+- พี่พิมพ์โค้ดมา หรือใช้ /check ตามด้วยโค้ด หนูจะตรวจให้ (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel/CSV มาตรวจทั้งไฟล์ได้
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
@@ -189,9 +196,11 @@ def line_headers():
     }
 
 
-def send_reply(reply_token, to, text):
+def send_reply(reply_token, to, text, extra_messages=()):
     """Reply with the reply token; fall back to push if the token expired."""
-    messages = [{"type": "text", "text": chunk} for chunk in split_for_line(clean_for_line(text))]
+    extra_messages = list(extra_messages)
+    chunks = split_for_line(clean_for_line(text))[:LINE_MAX_MESSAGES - len(extra_messages)]
+    messages = [{"type": "text", "text": chunk} for chunk in chunks] + extra_messages
     try:
         r = requests.post(LINE_REPLY_API, headers=line_headers(),
                           data=json.dumps({"replyToken": reply_token, "messages": messages}), timeout=10)
@@ -240,7 +249,54 @@ def store_chat_history_to_csv(chat_id, user_id, user_message, bot_message):
             })
 
 
-def handle_event(event):
+def handle_file(event, chat_id, user_id, base_url):
+    reply_token = event["replyToken"]
+    message = event["message"]
+    file_name = obk_files.safe_name(message.get("fileName", ""))
+
+    if not obk_files.is_supported(file_name):
+        send_reply(reply_token, chat_id, "ตอนนี้หนูตรวจได้แค่ไฟล์ .xlsx .xls และ .csv ที่มี Index code นะคะพี่")
+        return
+    if obk_validator.get_master() is None:
+        send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจไฟล์ให้ไม่ได้")
+        return
+    if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
+        send_reply(reply_token, chat_id, f"ไฟล์ใหญ่เกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB ค่ะพี่ ลองแบ่งไฟล์แล้วส่งใหม่นะคะ")
+        return
+
+    if event.get("source", {}).get("type") == "user":
+        show_loading(user_id)
+    try:
+        data, _ = download_line_content(message["id"])
+        result, token = obk_files.validate_file(file_name, data)
+    except Exception:
+        log.exception("File validation failed")
+        send_reply(reply_token, chat_id, f"หนูเปิดหรือตรวจไฟล์ {file_name} ไม่สำเร็จค่ะพี่ ไฟล์อาจเสียหรือมีรหัสผ่าน ลองส่งใหม่อีกทีนะคะ")
+        return
+
+    summary = obk_files.format_summary(result, file_name)
+    extra = []
+    if not result.get("skipped"):
+        links = []
+        for path in result.get("outputs", []):
+            name = os.path.basename(path)
+            url = f"{base_url}/files/{token}/{quote(name)}"
+            if name.endswith(".png"):
+                extra.append({"type": "image", "originalContentUrl": url, "previewImageUrl": url})
+            else:
+                links.append(f"- {name}\n{url}")
+        if links:
+            hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
+            summary += f"\n\nดาวน์โหลดไฟล์ผลตรวจ (ลิงก์ใช้ได้ {hours} ชั่วโมง):\n" + "\n".join(links)
+
+    # Remember the summary so follow-up questions about the file make sense
+    with chat_locks[chat_id]:
+        remember(chat_id, f"(พี่ส่งไฟล์ {file_name} มาให้ตรวจ Index code)", summary)
+    store_chat_history_to_csv(chat_id, user_id, f"[file] {file_name}", summary)
+    send_reply(reply_token, chat_id, summary, extra)
+
+
+def handle_event(event, base_url=""):
     if event.get("type") != "message" or "replyToken" not in event:
         return
 
@@ -295,12 +351,15 @@ def handle_event(event):
             types.Part.from_text(text="(พี่ส่งรูปนี้มา ช่วยดูแล้วตอบหรืออธิบายให้หน่อย)"),
         ]
         history_text = "(พี่ส่งรูปภาพมาให้ดู)"
+    elif msg_type == "file":
+        handle_file(event, chat_id, user_id, base_url)
+        return
     elif msg_type == "sticker":
         keywords = ", ".join(message.get("keywords", [])[:5])
         history_text = f"(พี่ส่งสติกเกอร์มา{' สื่อถึง: ' + keywords if keywords else ''})"
         user_parts = [types.Part.from_text(text=history_text)]
     else:
-        send_reply(reply_token, chat_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ กับสติกเกอร์นะคะพี่")
+        send_reply(reply_token, chat_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ สติกเกอร์ และไฟล์ Excel/CSV นะคะพี่")
         return
 
     if source.get("type") == "user":
@@ -325,9 +384,9 @@ def verify_signature(body, signature):
     return hmac.compare_digest(base64.b64encode(digest).decode("utf-8"), signature)
 
 
-def run_safely(event):
+def run_safely(event, base_url):
     try:
-        handle_event(event)
+        handle_event(event, base_url)
     except Exception:
         log.exception("Error handling event")
 
@@ -339,10 +398,19 @@ def webhook():
         abort(400)
 
     payload = json.loads(body)
+    base_url = PUBLIC_BASE_URL or request.url_root.rstrip("/")
     # Answer LINE immediately and do the slow AI work in the background
     for event in payload.get("events", []):
-        executor.submit(run_safely, event)
+        executor.submit(run_safely, event, base_url)
     return "OK", 200
+
+
+@app.route("/files/<token>/<path:name>", methods=["GET"])
+def download(token, name):
+    path = obk_files.get_download(token, name)
+    if not path:
+        abort(404)
+    return send_file(path, as_attachment=not name.endswith(".png"), download_name=name)
 
 
 @app.route("/", methods=["GET"])

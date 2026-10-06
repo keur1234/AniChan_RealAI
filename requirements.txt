@@ -3,3 +3,7 @@ python-dotenv
 requests
 google-genai>=1.0
 gunicorn
+pandas
+openpyxl
+xlrd
+matplotlib
