@@ -14,10 +14,14 @@ MAX_FILE_BYTES = int(os.getenv("OBK_MAX_FILE_MB", "20")) * 1024 * 1024
 DOWNLOAD_TTL_SECONDS = int(os.getenv("OBK_DOWNLOAD_TTL_HOURS", "24")) * 3600
 WORK_ROOT = os.path.join(tempfile.gettempdir(), "anichan_obk")
 
+# Thai fonts to fall back to for Thai file/sheet names in the pie chart (Windows, Linux, macOS)
+THAI_FONTS = ['Leelawadee UI', 'Leelawadee', 'Tahoma', 'Loma', 'Garuda', 'Noto Sans Thai', 'Thonburi']
+
 try:
     import matplotlib
-    # Fall back to a Thai font so Thai sheet/file names render in the pie chart title
-    matplotlib.rcParams['font.family'] = ['DejaVu Sans', 'Loma', 'Garuda', 'Noto Sans Thai']
+    from matplotlib import font_manager
+    installed = {f.name for f in font_manager.fontManager.ttflist}
+    matplotlib.rcParams['font.family'] = ['DejaVu Sans'] + [f for f in THAI_FONTS if f in installed]
 except ImportError:
     pass
 
