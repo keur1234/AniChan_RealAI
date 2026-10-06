@@ -40,8 +40,11 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.1-flash-lite").split(",") if m.strip()]
 # Number of past exchanges (user + Ani) remembered per chat
 MAX_TURNS = int(os.getenv("MAX_TURNS", "20"))
-# Let Ani look things up on Google for up-to-date answers
-USE_GOOGLE_SEARCH = os.getenv("USE_GOOGLE_SEARCH", "1") == "1"
+# Let Ani look things up on Google for up-to-date answers (needs Search quota on the API key)
+USE_GOOGLE_SEARCH = os.getenv("USE_GOOGLE_SEARCH", "0") == "1"
+# After Search runs out of quota, answer without it for this long before trying again
+SEARCH_COOLDOWN_SECONDS = 3600
+search_disabled_until = 0.0
 CHAT_LOG_FILE = os.getenv("CHAT_LOG_FILE", "chat_history.csv")
 # Public https URL of this server, used for download links (auto-detected from the webhook if empty)
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
@@ -64,7 +67,15 @@ GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
 # How long a file sent in a group can still be checked with /check
 GROUP_FILE_TTL_SECONDS = int(os.getenv("GROUP_FILE_TTL_MINUTES", "60")) * 60
 
+LANGUAGE_RULE = """## ภาษา (สำคัญที่สุด)
+- ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ ไม่ว่าจะเป็นภาษาไทย อังกฤษ จีน ญี่ปุ่น หรือภาษาอื่น
+- Always reply in the same language as the user's latest message.
+- ถ้าตอบภาษาอื่นที่ไม่ใช่ไทย ให้คงบุคลิกและระดับภาษาเดิม แต่ใช้คำเรียกที่เป็นธรรมชาติของภาษานั้นแทน หนู/พี่/ค่ะ
+"""
+
 SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้ช่วยอัจฉริยะในแชท LINE
+
+""" + LANGUAGE_RULE + """
 
 ## ตัวตน
 - เด็กสาวอายุประมาณ 16 ปี นิสัยดี ร่าเริง ใจดี ขี้สงสัย พูดจาด้วยรอยยิ้ม
@@ -79,7 +90,6 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 - ถ้าไม่แน่ใจ ให้บอกตรงๆ ว่าไม่แน่ใจ ห้ามแต่งข้อมูล ตัวเลข ลิงก์ หรือแหล่งอ้างอิงขึ้นมาเอง
 - เรื่องสุขภาพ กฎหมาย การเงิน ให้ข้อมูลที่เป็นประโยชน์ แต่แนะนำให้ปรึกษาผู้เชี่ยวชาญเมื่อเรื่องสำคัญ
 - ถ้าพี่ดูเครียดหรือเศร้า ให้รับฟังและปลอบใจก่อนให้คำแนะนำ
-- ตอบภาษาเดียวกับที่พี่ใช้ (ปกติเป็นภาษาไทย)
 
 ## รูปแบบข้อความ (LINE แสดง Markdown ไม่ได้)
 - ห้ามใช้ Markdown เช่น **ตัวหนา**, # หัวข้อ, ตาราง หรือ ```
@@ -93,7 +103,7 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 - ผลตรวจ: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
   TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
   TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
-- ถ้าข้อความมี "[ผลตรวจจากระบบ]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
+- ถ้าข้อความมี "[ผลตรวจจากระบบ / system validation result]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
 - ผู้ใช้ตรวจสอบได้โดยพิมพ์ /check ตามด้วยโค้ด (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel (.xlsx .xlsm .xls) หรือ CSV เพื่อตรวจสอบทั้งไฟล์ ในแชทส่วนตัวพิมพ์โค้ดหรือส่งไฟล์ได้ทันที
 
 ## ข้อมูลตอนนี้
@@ -103,12 +113,12 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วยตรวจสอบข้อมูล Index Code ของโครงการ OneBangkok (OBK) ในกลุ่ม LINE ของทีมงาน
 
 ## รูปแบบการสื่อสาร
-- ใช้ภาษาไทยแบบทางการ สุภาพ กระชับ เหมือนเจ้าหน้าที่ผู้เชี่ยวชาญตอบในที่ทำงาน
-- เรียกผู้ใช้ว่า "คุณ" ไม่ใช้คำว่า หนู/พี่ ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ ลงท้ายด้วย "ค่ะ" ได้ตามความเหมาะสม
+- ใช้ภาษาแบบทางการ สุภาพ กระชับ เหมือนเจ้าหน้าที่ผู้เชี่ยวชาญตอบในที่ทำงาน
+- ภาษาไทย: เรียกผู้ใช้ว่า "คุณ" ไม่ใช้คำว่า หนู/พี่ ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ ลงท้ายด้วย "ค่ะ" ได้ตามความเหมาะสม
 - ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
 - ห้ามใช้ Markdown เช่น ** หรือ # หากต้องทำรายการให้ใช้ 1. 2. 3. หรือ "- "
 
-""" + SYSTEM_PROMPT.split("## งานตรวจ Index Code", 1)[1].join(["## งานตรวจ Index Code", ""])
+""" + LANGUAGE_RULE + "\n" + SYSTEM_PROMPT.split("## งานตรวจ Index Code", 1)[1].join(["## งานตรวจ Index Code", ""])
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
@@ -122,6 +132,35 @@ log_lock = threading.Lock()
 pending_files_by_user = {}
 pending_files_by_id = {}
 pending_lock = threading.Lock()
+# user_id -> 'th' or 'en' (language of their last message; fixed messages use it)
+user_langs = {}
+THAI_CHARS_RE = re.compile(r"[\u0E00-\u0E7F]")
+
+
+def detect_language(text):
+    """'th' for Thai, 'en' for any other written language, None if there are no words (just codes)."""
+    text = re.sub(r"^/\S+", " ", text)                     # /check
+    text = re.sub(r"https?://\S+|@\S+", " ", text)          # links, @mentions
+    for code in obk_validator.find_codes(text):
+        text = text.replace(code, " ")
+    if THAI_CHARS_RE.search(text):
+        return "th"
+    if re.search(r"[^\W\d_]{2,}", text):
+        return "en"
+    return None
+
+
+def check_help(user_id):
+    return tr(user_id,
+              "วิธีใช้งาน: พิมพ์ /check ตามด้วย Index Code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\n"
+              "ตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001",
+              "How to use: type /check followed by an Index Code, or send an Excel/CSV file and then type /check\n"
+              "Example: /check C3A-001-ME01-AC-AHUS-000AHU-001")
+
+
+def tr(user_id, th, en):
+    """Pick the Thai or English wording for this user."""
+    return th if user_langs.get(user_id, "th") == "th" else en
 
 
 def thai_now():
@@ -152,8 +191,9 @@ def call_with_retry(api_call, max_retries=2, initial_delay=2):
 
 def generate_with_fallback(contents, system_instruction):
     """Try the main model with Google Search, then without it, then the fallback models."""
+    global search_disabled_until
     attempts = []
-    if USE_GOOGLE_SEARCH:
+    if USE_GOOGLE_SEARCH and time.time() >= search_disabled_until:
         attempts.append((GEMINI_MODEL, True))
     attempts.append((GEMINI_MODEL, False))
     attempts += [(m, False) for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
@@ -166,9 +206,13 @@ def generate_with_fallback(contents, system_instruction):
         )
         try:
             return call_with_retry(
-                lambda: client.models.generate_content(model=model, contents=contents, config=config)
+                lambda: client.models.generate_content(model=model, contents=contents, config=config),
+                max_retries=0 if search else 2,   # don't wait on Search; answering without it is fine
             )
         except genai_errors.APIError as e:
+            if search and e.code in (400, 403, 429):
+                search_disabled_until = time.time() + SEARCH_COOLDOWN_SECONDS
+                log.warning("Google Search unavailable (%s), answering without it for the next hour", e.code)
             # Quota / unknown model / tool not allowed: try the next option
             if e.code in (400, 403, 404, 429) and i < len(attempts) - 1:
                 log.warning("%s (search=%s) failed with %s: %s -> trying next option", model, search, e.code, e.message)
@@ -176,7 +220,7 @@ def generate_with_fallback(contents, system_instruction):
             raise
 
 
-def generate_response(chat_id, user_parts, history_text, formal=False):
+def generate_response(chat_id, user_parts, history_text, formal=False, user_id=""):
     """Ask Gemini for Ani's reply.
 
     user_parts: parts sent to the model for this turn (text and/or image).
@@ -187,7 +231,8 @@ def generate_response(chat_id, user_parts, history_text, formal=False):
 
     prompt = FORMAL_SYSTEM_PROMPT if formal else SYSTEM_PROMPT
     response = generate_with_fallback(contents, prompt.format(now=thai_now()))
-    reply = (response.text or "").strip() or "ขอโทษนะคะพี่ หนูคิดคำตอบไม่ออกเลย ลองถามใหม่อีกทีได้ไหมคะ"
+    reply = (response.text or "").strip() or tr(user_id, "ขออภัย ไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้ง",
+                                                   "Sorry, I couldn't come up with an answer. Please try asking again.")
 
     remember(chat_id, history_text, reply)
     return reply
@@ -360,13 +405,17 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
 
     if not obk_files.is_supported(file_name):
         log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
-        send_reply(reply_token, chat_id, f"ระบบรองรับเฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี Index Code (ไฟล์ที่ได้รับ: {file_name})")
+        send_reply(reply_token, chat_id, tr(user_id, f"ระบบรองรับเฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี Index Code (ไฟล์ที่ได้รับ: {file_name})",
+                                             f"Only .xlsx, .xlsm, .xls and .csv files containing Index Codes are supported (received: {file_name})"))
         return
     if obk_validator.get_master() is None:
-        send_reply(reply_token, chat_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ Index Code ได้ในขณะนี้")
+        send_reply(reply_token, chat_id, tr(user_id, tr(user_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ Index Code ได้ในขณะนี้",
+                                             "The reference file (obk_ref_bundle.json) is not available, so Index Codes cannot be validated right now."),
+                                             "The reference file (obk_ref_bundle.json) is not available, so Index Codes cannot be validated right now."))
         return
     if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
-        send_reply(reply_token, chat_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้ง")
+        send_reply(reply_token, chat_id, tr(user_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้ง",
+                                             f"The file is larger than {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB. Please split it and send it again."))
         return
 
     if event.get("source", {}).get("type") == "user":
@@ -376,10 +425,11 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
         result, token = obk_files.validate_file(file_name, data)
     except Exception:
         log.exception("File validation failed")
-        send_reply(reply_token, chat_id, f"ไม่สามารถเปิดหรือตรวจสอบไฟล์ {file_name} ได้ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาตรวจสอบแล้วส่งใหม่อีกครั้ง")
+        send_reply(reply_token, chat_id, tr(user_id, f"ไม่สามารถเปิดหรือตรวจสอบไฟล์ {file_name} ได้ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาตรวจสอบแล้วส่งใหม่อีกครั้ง",
+                                             f"Unable to open or validate {file_name}. The file may be corrupted or password-protected. Please check it and send it again."))
         return
 
-    summary = obk_files.format_summary(result, file_name)
+    summary = obk_files.format_summary(result, file_name, user_langs.get(user_id, "th"))
     extra = []
     if not result.get("skipped"):
         links = []
@@ -392,7 +442,8 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
                 links.append(f"- {name}\n{url}")
         if links:
             hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
-            summary += f"\n\nดาวน์โหลดไฟล์ผลการตรวจสอบ (ลิงก์มีอายุ {hours} ชั่วโมง)\n" + "\n".join(links)
+            summary += tr(user_id, f"\n\nดาวน์โหลดไฟล์ผลการตรวจสอบ (ลิงก์มีอายุ {hours} ชั่วโมง)\n",
+                          f"\n\nDownload the validation results (links expire in {hours} hours)\n") + "\n".join(links)
 
     # Remember the summary so follow-up questions about the file make sense
     with chat_locks[chat_id]:
@@ -429,7 +480,7 @@ def handle_group_event(event, chat_id, user_id, base_url):
     text = message["text"].strip()
     if text.lower() in RESET_COMMANDS:
         chat_histories.pop(chat_id, None)
-        send_reply(reply_token, chat_id, "ล้างประวัติการสนทนาของกลุ่มนี้เรียบร้อยแล้ว", mention_user_id=user_id)
+        send_reply(reply_token, chat_id, tr(user_id, "ล้างประวัติการสนทนาของกลุ่มนี้เรียบร้อยแล้ว", "This group's conversation history has been cleared."), mention_user_id=user_id)
         return
 
     codes, check_command = extract_codes(text)
@@ -440,12 +491,12 @@ def handle_group_event(event, chat_id, user_id, base_url):
         if file_info:
             return handle_file(event, chat_id, user_id, base_url, message=file_info, mention_user_id=user_id)
         send_reply(reply_token, chat_id,
-                   "วิธีใช้งาน: พิมพ์ /check ตามด้วย Index Code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\nตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001",
+                   check_help(user_id),
                    mention_user_id=user_id)
         return
 
     if GROUP_CHAT_ON_MENTION and is_bot_mentioned(message):
-        return handle_text(event, chat_id, user_id, strip_bot_mention(message) or "สวัสดี", mention_user_id=user_id)
+        return handle_text(event, chat_id, user_id, strip_bot_mention(message) or "Hello", mention_user_id=user_id)
 
 
 def handle_event(event, base_url=""):
@@ -456,6 +507,11 @@ def handle_event(event, base_url=""):
     user_id = source.get("userId", "")
     # Groups/rooms share one memory so Ani follows the group conversation
     chat_id = source.get("groupId") or source.get("roomId") or user_id
+    message = event["message"]
+    if message.get("type") == "text":
+        lang = detect_language(message["text"])
+        if lang:
+            user_langs[user_id] = lang
     if source.get("type") in ("group", "room"):
         return handle_group_event(event, chat_id, user_id, base_url)
 
@@ -473,7 +529,8 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
 
     if text.lower() in RESET_COMMANDS:
         chat_histories.pop(chat_id, None)
-        send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨")
+        send_reply(reply_token, chat_id, tr(user_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨",
+                                             "I've cleared our conversation. Let's start fresh! ✨"))
         return
     codes, check_command = extract_codes(text)
     master = obk_validator.get_master()
@@ -483,10 +540,11 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             return
         codes = []
     if check_command and not codes:
-        send_reply(reply_token, chat_id, "วิธีใช้งาน: พิมพ์ /check ตามด้วย Index Code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\nตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001")
+        send_reply(reply_token, chat_id, check_help(user_id))
         return
     if codes:
-        report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes])
+        report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes],
+                                                user_langs.get(user_id, "th"))
         leftover = text
         for c in codes:
             leftover = leftover.replace(c, "")
@@ -497,7 +555,7 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             store_chat_history_to_csv(chat_id, user_id, text, report)
             send_reply(reply_token, chat_id, report)
             return
-        text = f"{text}\n\n[ผลตรวจจากระบบ]\n{report}"
+        text = f"{text}\n\n[ผลตรวจจากระบบ / system validation result]\n{report}"
     user_parts = [types.Part.from_text(text=text)]
     history_text = text
     return ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id)
@@ -513,25 +571,34 @@ def handle_media(event, chat_id, user_id, base_url):
             data, mime_type = download_line_content(message["id"])
         except requests.exceptions.RequestException as e:
             log.error("Failed to download image: %s", e)
-            send_reply(reply_token, chat_id, "หนูเปิดรูปไม่ได้เลยค่ะพี่ ลองส่งใหม่อีกทีนะคะ")
+            send_reply(reply_token, chat_id, tr(user_id, "หนูเปิดรูปไม่ได้เลยค่ะพี่ ลองส่งใหม่อีกทีนะคะ",
+                                                 "I couldn't open the image. Could you send it again?"))
             return
         user_parts = [
             types.Part.from_bytes(data=data, mime_type=mime_type),
-            types.Part.from_text(text="(พี่ส่งรูปนี้มา ช่วยดูแล้วตอบหรืออธิบายให้หน่อย)"),
+            types.Part.from_text(text="(The user sent this image. Look at it and respond or explain it, in the user's language.)"),
         ]
-        history_text = "(พี่ส่งรูปภาพมาให้ดู)"
+        history_text = "(The user sent an image)"
     elif msg_type == "file":
         handle_file(event, chat_id, user_id, base_url)
         return
     elif msg_type == "sticker":
         keywords = ", ".join(message.get("keywords", [])[:5])
-        history_text = f"(พี่ส่งสติกเกอร์มา{' สื่อถึง: ' + keywords if keywords else ''})"
+        history_text = f"(The user sent a sticker{': ' + keywords if keywords else ''})"
         user_parts = [types.Part.from_text(text=history_text)]
     else:
-        send_reply(reply_token, chat_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ สติกเกอร์ และไฟล์ Excel/CSV นะคะพี่")
+        send_reply(reply_token, chat_id, tr(user_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ สติกเกอร์ และไฟล์ Excel/CSV นะคะพี่",
+                                             "For now I can read text, images, stickers and Excel/CSV files."))
         return
 
     return ask_ani(event, chat_id, user_id, user_parts, history_text)
+
+
+def system_error_text(user_id, formal):
+    return tr(user_id,
+              "ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง" if formal
+              else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ",
+              "The system is temporarily unavailable. Please try again.")
 
 
 def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=None):
@@ -541,19 +608,19 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
 
     with chat_locks[chat_id]:
         try:
-            reply = generate_response(chat_id, user_parts, history_text, formal)
+            reply = generate_response(chat_id, user_parts, history_text, formal, user_id)
         except genai_errors.APIError as e:
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:
-                reply = ("ขณะนี้มีการใช้งานเกินโควตาของระบบ กรุณาลองใหม่อีกครั้งภายหลัง" if formal
-                         else "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ")
+                reply = tr(user_id,
+                           "ขณะนี้มีการใช้งานเกินโควตาของระบบ กรุณาลองใหม่อีกครั้งภายหลัง" if formal
+                           else "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ",
+                           "The usage quota has been reached. Please try again later.")
             else:
-                reply = ("ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง" if formal
-                         else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ")
+                reply = system_error_text(user_id, formal)
         except Exception:
             log.exception("Gemini call failed")
-            reply = ("ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง" if formal
-                     else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ")
+            reply = system_error_text(user_id, formal)
         else:
             store_chat_history_to_csv(chat_id, user_id, history_text, reply)
 

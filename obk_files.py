@@ -76,42 +76,58 @@ def validate_file(file_name, data):
     return result, token
 
 
-def format_summary(result, file_name):
-    """Plain-text summary for LINE (no Markdown)."""
+SKIP_REASONS_EN = {
+    'ไฟล์ว่าง': 'the file is empty',
+    'ไม่พบคอลัมน์ Asset ID': 'no Asset ID column was found',
+    'ไม่มี Asset ID ที่ใช้ได้': 'no usable Asset IDs were found',
+}
+
+
+def format_summary(result, file_name, lang='th'):
+    """Formal plain-text summary for LINE (no Markdown)."""
+    t = lambda th, en: obk_validator._t(lang, th, en)
+    cnt = lambda n: f"{n:,} รายการ" if lang == 'th' else f"{n:,}"
     if result.get('skipped'):
-        msg = [f"ไม่สามารถตรวจสอบไฟล์ {file_name} ได้: {result['skipped']}"]
+        reason = result['skipped'] if lang == 'th' else SKIP_REASONS_EN.get(result['skipped'], result['skipped'])
+        msg = [t(f"ไม่สามารถตรวจสอบไฟล์ {file_name} ได้: {reason}", f"Unable to validate {file_name}: {reason}")]
         if result.get('columns'):
-            msg.append("คอลัมน์ที่พบในไฟล์: " + ", ".join(result['columns'][:15]))
-            msg.append("ระบบรองรับคอลัมน์ชื่อ Asset ID, IndexCode, Index, Equipment ID, Name เป็นต้น "
-                       "กรุณาตรวจสอบชื่อหัวคอลัมน์แล้วส่งไฟล์อีกครั้ง")
+            msg.append(t("คอลัมน์ที่พบในไฟล์: ", "Columns found: ") + ", ".join(result['columns'][:15]))
+            msg.append(t("ระบบรองรับคอลัมน์ชื่อ Asset ID, IndexCode, Index, Equipment ID, Name เป็นต้น "
+                         "กรุณาตรวจสอบชื่อหัวคอลัมน์แล้วส่งไฟล์อีกครั้ง",
+                         "Supported column names include Asset ID, IndexCode, Index, Equipment ID and Name. "
+                         "Please check the header row and send the file again."))
         return "\n".join(msg)
 
+    pct = lambda k: f"{cnt(result[k]['count'])} ({result[k]['pct']}%)"
     lines = [
-        "รายงานผลการตรวจสอบ Index Code",
-        f"ไฟล์: {file_name}",
-        f"คอลัมน์ที่ใช้ตรวจสอบ: {result['column_used']}",
-        f"จำนวนรายการ: {result['records']:,} รายการ (Asset ID ไม่ซ้ำ {result['unique_assets']:,} รายการ)",
+        t("รายงานผลการตรวจสอบ Index Code", "Index Code Validation Report"),
+        t("ไฟล์", "File") + f": {file_name}",
+        t("คอลัมน์ที่ใช้ตรวจสอบ", "Column checked") + f": {result['column_used']}",
+        t(f"จำนวนรายการ: {result['records']:,} รายการ (Asset ID ไม่ซ้ำ {result['unique_assets']:,} รายการ)",
+          f"Records: {result['records']:,} ({result['unique_assets']:,} unique Asset IDs)"),
         "",
-        "สรุปตัวชี้วัด",
-        f"- QLT (TYPE A): {result['QLT_type_a']['count']:,} รายการ ({result['QLT_type_a']['pct']}%)",
-        f"- BFV (รูปแบบ BIM ถูกต้อง): {result['BFV_correct_format']['count']:,} รายการ ({result['BFV_correct_format']['pct']}%)",
-        f"- Asset Type ในรายการที่อนุมัติ: {result['approved_asset_type']['count']:,} รายการ ({result['approved_asset_type']['pct']}%)",
+        t("สรุปตัวชี้วัด", "Key metrics"),
+        f"- QLT (TYPE A): {pct('QLT_type_a')}",
+        t("- BFV (รูปแบบ BIM ถูกต้อง): ", "- BFV (correct BIM format): ") + pct('BFV_correct_format'),
+        t("- Asset Type ในรายการที่อนุมัติ: ", "- Asset Type in approved list: ") + pct('approved_asset_type'),
         "",
-        "จำแนกตามผลการตรวจสอบ",
+        t("จำแนกตามผลการตรวจสอบ", "Breakdown by result"),
     ]
-    for t, v in result['types'].items():
+    for typ, v in result['types'].items():
         if v['count']:
-            lines.append(f"- {obk_validator.type_label(t)}: {v['count']:,} รายการ ({v['pct']}%)")
-    lines.append(f"- Asset ID ซ้ำข้ามชีท: {result['duplicates']:,} รายการ")
+            lines.append(f"- {obk_validator.type_label(typ, lang)}: {cnt(v['count'])} ({v['pct']}%)")
+    lines.append(t("- Asset ID ซ้ำข้ามชีท: ", "- Asset IDs duplicated across sheets: ") + cnt(result['duplicates']))
 
     if result['top_rules_unique_assets']:
-        lines += ["", "กฎที่พบข้อผิดพลาดมากที่สุด (นับตาม Asset ID ไม่ซ้ำ)"]
-        lines += [f"- กฎข้อ {rule}: {n:,} รายการ" for rule, n in result['top_rules_unique_assets'][:5]]
+        lines += ["", t("กฎที่พบข้อผิดพลาดมากที่สุด (นับตาม Asset ID ไม่ซ้ำ)", "Most frequent rule failures (unique Asset IDs)")]
+        lines += [t(f"- กฎข้อ {rule}", f"- Rule {rule}") + f": {cnt(n)}" for rule, n in result['top_rules_unique_assets'][:5]]
     if len(result['worst_sheets']) > 1:
-        lines += ["", "ชีทที่มีสัดส่วน TYPE A ต่ำที่สุด"]
-        lines += [f"- {w['Source Sheet']}: {w['TYPE A %']}% จาก {w['TOTAL']:,} รายการ" for w in result['worst_sheets'][:3]]
+        lines += ["", t("ชีทที่มีสัดส่วน TYPE A ต่ำที่สุด", "Sheets with the lowest TYPE A rate")]
+        lines += [f"- {w['Source Sheet']}: {w['TYPE A %']}% " + t("จาก", "of") + f" {cnt(w['TOTAL'])}"
+                  for w in result['worst_sheets'][:3]]
     if result['sample_failures']:
-        lines += ["", "ตัวอย่างรายการที่ไม่ผ่านเกณฑ์"]
+        lines += ["", t("ตัวอย่างรายการที่ไม่ผ่านเกณฑ์", "Examples of failed items")]
         for s in result['sample_failures'][:5]:
-            lines.append(f"- {s['Asset ID']} ({s['TYPE']}): {obk_validator.reason_text(s['validation_result_thai'].split('; ')[0])}")
+            reason = s['validation_result_thai'] if lang == 'th' else s.get('validation_result', s['validation_result_thai'])
+            lines.append(f"- {s['Asset ID']} ({s['TYPE']}): {obk_validator.reason_text(reason.split('; ')[0])}")
     return "\n".join(lines)

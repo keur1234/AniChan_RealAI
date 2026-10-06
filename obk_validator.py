@@ -29,6 +29,11 @@ PART_SPECS = [
 ]
 PART_NAMES_TH = ["Component", "Floor", "Space", "Main System", "Sub System", "Equipment", "Running No."]
 
+
+def _t(lang, th, en):
+    """Pick the Thai or English text (en is used for every non-Thai language)."""
+    return th if lang == 'th' else en
+
 # Anything with 4+ dashes between letters/digits looks like an index code worth checking
 CODE_CANDIDATE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.]*(?:-[A-Za-z0-9_.]+){4,}(?:\s+NONE\b)?')
 
@@ -159,9 +164,10 @@ def check_code(code, md):
     t = apply_override(code, t)
     parts = (strip_exception_suffix(code) if has_exception_suffix(code) else code).split('-')
     result = {
-        'code': code, 'TYPE': t, 'reasons_th': th, 'rules': rules,
+        'code': code, 'TYPE': t, 'reasons_th': th, 'reasons_en': en, 'rules': rules,
         'correct_bim_format': check_index_code(code), 'parts': parts, 'hints': [],
     }
+    # hints are (thai, english) pairs
     if len(parts) >= 6:
         asset_type = '-'.join(parts[3:6])
         result['approved'] = asset_type in md['approved']
@@ -169,16 +175,19 @@ def check_code(code, md):
         if '8' in rules:
             close = difflib.get_close_matches(asset_type, md['_equipment_types'], n=3, cutoff=0.6)
             if close:
-                result['hints'].append(f"Asset Type ที่ใกล้เคียงใน Reference Table: {', '.join(close)}")
+                result['hints'].append((f"Asset Type ที่ใกล้เคียงใน Reference Table: {', '.join(close)}",
+                                        f"Closest Asset Types in the Reference Table: {', '.join(close)}"))
     if code != code.upper() and t != 'TYPE A':
         upper_type = apply_override(code.upper(), validate_index_code(code.upper(), md)[2])
         if upper_type == 'TYPE A':
-            result['hints'].append(f"หากแก้ไขเป็นตัวพิมพ์ใหญ่ ({code.upper()}) รหัสจะผ่านเกณฑ์ TYPE A")
+            result['hints'].append((f"หากแก้ไขเป็นตัวพิมพ์ใหญ่ ({code.upper()}) รหัสจะผ่านเกณฑ์ TYPE A",
+                                    f"In upper case ({code.upper()}) the code passes as TYPE A"))
     if len(parts) >= 3 and '4' in rules:
         loc = '-'.join(parts[:3])
         close = difflib.get_close_matches(loc, md['_locations'], n=3, cutoff=0.7)
         if close:
-            result['hints'].append(f"Location ที่ใกล้เคียงใน Reference Table: {', '.join(close)}")
+            result['hints'].append((f"Location ที่ใกล้เคียงใน Reference Table: {', '.join(close)}",
+                                    f"Closest Locations in the Reference Table: {', '.join(close)}"))
     return result
 
 
@@ -189,6 +198,13 @@ TYPE_LABEL_TH = {
     'TYPE C': 'ไม่ผ่านเกณฑ์บังคับ',
     'N/A': 'ข้อยกเว้น',
 }
+TYPE_LABEL_EN = {
+    'TYPE A': 'Passed',
+    'TYPE B': 'Duplicate running number',
+    'TYPE B OR C': 'Equipment / Asset Type needs review',
+    'TYPE C': 'Failed mandatory rules',
+    'N/A': 'Exception',
+}
 
 
 def reason_text(reason):
@@ -196,32 +212,39 @@ def reason_text(reason):
     return re.sub(r'^กฏ\s*', 'กฎข้อ ', reason)
 
 
-def type_label(t):
-    label = TYPE_LABEL_TH.get(t)
+def type_label(t, lang='th'):
+    label = (TYPE_LABEL_TH if lang == 'th' else TYPE_LABEL_EN).get(t)
     return f"{t} ({label})" if label else (t or '-')
 
 
-def format_report(results):
+def format_report(results, lang='th'):
     """Formal plain-text report for LINE (no Markdown, no emoji)."""
-    lines = ["รายงานผลการตรวจสอบ Index Code", ""]
+    lines = [_t(lang, "รายงานผลการตรวจสอบ Index Code", "Index Code Validation Report"), ""]
+    code_label = _t(lang, "รหัส", "Code")
     for i, r in enumerate(results, 1):
-        lines.append(f"{i}. รหัส: {r['code']}" if len(results) > 1 else f"รหัส: {r['code']}")
-        lines.append(f"ผลการตรวจสอบ: {type_label(r['TYPE'])}")
-        if r['TYPE'] != 'TYPE A' and r['reasons_th']:
-            lines.append("รายการที่ไม่เป็นไปตามเกณฑ์:")
-            lines += [f"- {reason_text(reason)}" for reason in r['reasons_th'].split('; ')]
-        lines.append(f"รูปแบบ BIM (BFV): {'ถูกต้อง' if r['correct_bim_format'] else 'ไม่ถูกต้อง'}")
+        lines.append(f"{i}. {code_label}: {r['code']}" if len(results) > 1 else f"{code_label}: {r['code']}")
+        lines.append(_t(lang, "ผลการตรวจสอบ", "Result") + f": {type_label(r['TYPE'], lang)}")
+        reasons = r['reasons_th'] if lang == 'th' else r['reasons_en']
+        if r['TYPE'] != 'TYPE A' and reasons:
+            lines.append(_t(lang, "รายการที่ไม่เป็นไปตามเกณฑ์:", "Issues found:"))
+            lines += [f"- {reason_text(reason)}" for reason in reasons.split('; ')]
+        lines.append(_t(lang, "รูปแบบ BIM (BFV): ", "BIM format (BFV): ")
+                     + (_t(lang, "ถูกต้อง", "Correct") if r['correct_bim_format'] else _t(lang, "ไม่ถูกต้อง", "Incorrect")))
         if 'approved' in r:
-            lines.append(f"Asset Type ในรายการที่อนุมัติ: {'อยู่ในรายการ' if r['approved'] else 'ไม่อยู่ในรายการ'}")
+            lines.append(_t(lang, "Asset Type ในรายการที่อนุมัติ: ", "Asset Type in approved list: ")
+                         + (_t(lang, "อยู่ในรายการ", "Yes") if r['approved'] else _t(lang, "ไม่อยู่ในรายการ", "No")))
         if r.get('category'):
-            lines.append(f"หมวดระบบ: {r['category'].strip()}")
+            lines.append(_t(lang, "หมวดระบบ", "System category") + f": {r['category'].strip()}")
         if len(r['parts']) == 7:
-            lines.append("องค์ประกอบรหัส: " + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
+            lines.append(_t(lang, "องค์ประกอบรหัส: ", "Code parts: ")
+                         + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
         if r['hints']:
-            lines.append("ข้อเสนอแนะ:")
-            lines += [f"- {h}" for h in r['hints']]
+            lines.append(_t(lang, "ข้อเสนอแนะ:", "Suggestions:"))
+            lines += [f"- {h[0] if lang == 'th' else h[1]}" for h in r['hints']]
         lines.append("")
-    lines.append("หมายเหตุ: การตรวจสอบรหัสรายตัวไม่ครอบคลุมกฎข้อ 9 (Running Number ซ้ำ) ซึ่งต้องตรวจสอบจากไฟล์ทั้งชุด")
+    lines.append(_t(lang,
+                    "หมายเหตุ: การตรวจสอบรหัสรายตัวไม่ครอบคลุมกฎข้อ 9 (Running Number ซ้ำ) ซึ่งต้องตรวจสอบจากไฟล์ทั้งชุด",
+                    "Note: single-code checks do not cover Rule 9 (duplicate running number), which needs the whole file."))
     return "\n".join(lines).strip()
 
 
