@@ -36,6 +36,8 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+# Used when the main model is out of quota (comma-separated, tried in order)
+GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.1-flash-lite").split(",") if m.strip()]
 # Number of past exchanges (user + Ani) remembered per chat
 MAX_TURNS = int(os.getenv("MAX_TURNS", "20"))
 # Let Ani look things up on Google for up-to-date answers
@@ -109,19 +111,51 @@ def thai_now():
     return f"วัน{THAI_WEEKDAYS[now.weekday()]}ที่ {now.day}/{now.month}/{now.year + 543} เวลา {now:%H:%M} น."
 
 
-def call_with_retry(api_call, max_retries=4, initial_delay=2):
+def is_quota_exhausted(e):
+    """429 that waiting a few seconds won't fix (daily quota, or no free quota for this model/tool)."""
+    text = str(e)
+    return e.code == 429 and ("limit: 0" in text or "PerDay" in text or "per day" in text.lower())
+
+
+def call_with_retry(api_call, max_retries=2, initial_delay=2):
     delay = initial_delay
     for attempt in range(max_retries + 1):
         try:
             return api_call()
         except genai_errors.APIError as e:
             # Retry on rate limit / overloaded / transient server errors
-            if e.code in (429, 500, 503, 504) and attempt < max_retries:
-                log.warning("Gemini error %s, retry %d/%d in %ss", e.code, attempt + 1, max_retries, delay)
+            if e.code in (429, 500, 503, 504) and attempt < max_retries and not is_quota_exhausted(e):
+                log.warning("Gemini error %s, retry %d/%d in %ss: %s", e.code, attempt + 1, max_retries, delay, e.message)
                 time.sleep(delay)
                 delay *= 2
             else:
                 raise
+
+
+def generate_with_fallback(contents, system_instruction):
+    """Try the main model with Google Search, then without it, then the fallback models."""
+    attempts = []
+    if USE_GOOGLE_SEARCH:
+        attempts.append((GEMINI_MODEL, True))
+    attempts.append((GEMINI_MODEL, False))
+    attempts += [(m, False) for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
+
+    for i, (model, search) in enumerate(attempts):
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=[types.Tool(google_search=types.GoogleSearch())] if search else None,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+        try:
+            return call_with_retry(
+                lambda: client.models.generate_content(model=model, contents=contents, config=config)
+            )
+        except genai_errors.APIError as e:
+            # Quota / unknown model / tool not allowed: try the next option
+            if e.code in (400, 403, 404, 429) and i < len(attempts) - 1:
+                log.warning("%s (search=%s) failed with %s: %s -> trying next option", model, search, e.code, e.message)
+                continue
+            raise
 
 
 def generate_response(chat_id, user_parts, history_text):
@@ -133,13 +167,7 @@ def generate_response(chat_id, user_parts, history_text):
     history = chat_histories[chat_id]
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
 
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT.format(now=thai_now()),
-        tools=[types.Tool(google_search=types.GoogleSearch())] if USE_GOOGLE_SEARCH else None,
-    )
-    response = call_with_retry(
-        lambda: client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
-    )
+    response = generate_with_fallback(contents, SYSTEM_PROMPT.format(now=thai_now()))
     reply = (response.text or "").strip() or "ขอโทษนะคะพี่ หนูคิดคำตอบไม่ออกเลย ลองถามใหม่อีกทีได้ไหมคะ"
 
     remember(chat_id, history_text, reply)
@@ -368,6 +396,12 @@ def handle_event(event, base_url=""):
     with chat_locks[chat_id]:
         try:
             reply = generate_response(chat_id, user_parts, history_text)
+        except genai_errors.APIError as e:
+            log.error("Gemini call failed: %s %s", e.code, e.message)
+            if e.code == 429:
+                reply = "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ"
+            else:
+                reply = "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ"
         except Exception:
             log.exception("Gemini call failed")
             reply = "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ"
