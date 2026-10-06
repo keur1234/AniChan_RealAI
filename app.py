@@ -59,6 +59,10 @@ THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พ�
 RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
 CHECK_COMMANDS = ("/check", "/ตรวจ", "/เช็ค")
 MAX_CODES_PER_MESSAGE = 10
+# In groups Ani only answers /check, plus chat when @mentioned (set to 0 to answer /check only)
+GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
+# How long a file sent in a group can still be checked with /check
+GROUP_FILE_TTL_SECONDS = int(os.getenv("GROUP_FILE_TTL_MINUTES", "60")) * 60
 
 SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้ช่วยอัจฉริยะในแชท LINE
 
@@ -104,6 +108,10 @@ chat_histories = defaultdict(lambda: deque(maxlen=MAX_TURNS * 2))
 # One lock per chat so messages from the same chat are answered in order
 chat_locks = defaultdict(threading.Lock)
 log_lock = threading.Lock()
+# Files sent in groups wait for /check: (chat_id, user_id) -> latest file, message_id -> file
+pending_files_by_user = {}
+pending_files_by_id = {}
+pending_lock = threading.Lock()
 
 
 def thai_now():
@@ -224,24 +232,48 @@ def line_headers():
     }
 
 
-def send_reply(reply_token, to, text, extra_messages=()):
-    """Reply with the reply token; fall back to push if the token expired."""
-    extra_messages = list(extra_messages)
-    chunks = split_for_line(clean_for_line(text))[:LINE_MAX_MESSAGES - len(extra_messages)]
-    messages = [{"type": "text", "text": chunk} for chunk in chunks] + extra_messages
+def mention_message(text, user_id):
+    """Text message (v2) that starts by @mentioning user_id."""
+    escaped = text.replace("{", "{{").replace("}", "}}")
+    return {
+        "type": "textV2",
+        "text": "{user} " + escaped,
+        "substitution": {"user": {"type": "mention", "mentionee": {"type": "user", "userId": user_id}}},
+    }
+
+
+def post_messages(reply_token, to, messages):
+    """Reply with the reply token; fall back to push if the token expired. Returns True on success."""
     try:
         r = requests.post(LINE_REPLY_API, headers=line_headers(),
                           data=json.dumps({"replyToken": reply_token, "messages": messages}), timeout=10)
         r.raise_for_status()
-        return
+        return True
     except requests.exceptions.RequestException as e:
-        log.warning("Reply failed (%s), falling back to push", e)
+        body = getattr(e.response, "text", "")
+        log.warning("Reply failed (%s %s), falling back to push", e, body)
+        if getattr(e.response, "status_code", None) == 400:
+            return False          # bad message, push would fail the same way
     try:
         r = requests.post(LINE_PUSH_API, headers=line_headers(),
                           data=json.dumps({"to": to, "messages": messages}), timeout=10)
         r.raise_for_status()
+        return True
     except requests.exceptions.RequestException as e:
-        log.error("Push failed: %s", e)
+        log.error("Push failed: %s %s", e, getattr(e.response, "text", ""))
+        return False
+
+
+def send_reply(reply_token, to, text, extra_messages=(), mention_user_id=None):
+    extra_messages = list(extra_messages)
+    chunks = split_for_line(clean_for_line(text))[:LINE_MAX_MESSAGES - len(extra_messages)]
+    plain = [{"type": "text", "text": chunk} for chunk in chunks]
+    if mention_user_id and plain:
+        mentioned = [mention_message(chunks[0], mention_user_id)] + plain[1:]
+        if post_messages(reply_token, to, mentioned + extra_messages):
+            return
+        log.warning("Mention reply failed, sending without mention")
+    post_messages(reply_token, to, plain + extra_messages)
 
 
 def show_loading(user_id):
@@ -277,10 +309,43 @@ def store_chat_history_to_csv(chat_id, user_id, user_message, bot_message):
             })
 
 
-def handle_file(event, chat_id, user_id, base_url):
+def remember_group_file(chat_id, user_id, message):
+    info = {
+        "id": message["id"],
+        "fileName": message.get("fileName", ""),
+        "fileSize": message.get("fileSize", 0),
+        "time": time.time(),
+    }
+    with pending_lock:
+        now = time.time()
+        for key in [k for k, v in pending_files_by_id.items() if now - v["time"] > GROUP_FILE_TTL_SECONDS]:
+            pending_files_by_id.pop(key, None)
+        for key in [k for k, v in pending_files_by_user.items() if now - v["time"] > GROUP_FILE_TTL_SECONDS]:
+            pending_files_by_user.pop(key, None)
+        pending_files_by_user[(chat_id, user_id)] = info
+        pending_files_by_id[message["id"]] = info
+
+
+def find_group_file(chat_id, user_id, quoted_message_id):
+    """The file a /check refers to: the quoted file, else this person's latest file in the chat."""
+    with pending_lock:
+        info = pending_files_by_id.get(quoted_message_id) if quoted_message_id else None
+        info = info or pending_files_by_user.get((chat_id, user_id))
+    if info and time.time() - info["time"] <= GROUP_FILE_TTL_SECONDS:
+        return info
+    return None
+
+
+_send_reply = send_reply
+
+
+def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id=None):
     reply_token = event["replyToken"]
-    message = event["message"]
+    message = message or event["message"]
     file_name = obk_files.safe_name(message.get("fileName", ""))
+
+    def send_reply(token, to, text, extra=()):
+        _send_reply(token, to, text, extra, mention_user_id=mention_user_id)
 
     if not obk_files.is_supported(file_name):
         log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
@@ -325,6 +390,54 @@ def handle_file(event, chat_id, user_id, base_url):
     send_reply(reply_token, chat_id, summary, extra)
 
 
+def is_bot_mentioned(message):
+    return any(m.get("isSelf") for m in message.get("mention", {}).get("mentionees", []))
+
+
+def strip_bot_mention(message):
+    """Remove the '@Ani' text from a message that mentions the bot."""
+    text = message.get("text", "")
+    for m in sorted(message.get("mention", {}).get("mentionees", []), key=lambda m: -m.get("index", 0)):
+        if m.get("isSelf"):
+            text = text[:m["index"]] + text[m["index"] + m["length"]:]
+    return text.strip()
+
+
+def handle_group_event(event, chat_id, user_id, base_url):
+    """Groups: stay quiet unless someone types /check (or @mentions Ani to chat)."""
+    message = event["message"]
+    msg_type = message.get("type")
+    reply_token = event["replyToken"]
+
+    if msg_type == "file":
+        remember_group_file(chat_id, user_id, message)
+        return
+    if msg_type != "text":
+        return
+
+    text = message["text"].strip()
+    if text.lower() in RESET_COMMANDS:
+        chat_histories.pop(chat_id, None)
+        send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันในกลุ่มนี้หมดแล้วค่ะ ✨", mention_user_id=user_id)
+        return
+
+    codes, check_command = extract_codes(text)
+    if check_command:
+        if codes:
+            return handle_text(event, chat_id, user_id, text, mention_user_id=user_id)
+        file_info = find_group_file(chat_id, user_id, message.get("quotedMessageId"))
+        if file_info:
+            return handle_file(event, chat_id, user_id, base_url, message=file_info, mention_user_id=user_id)
+        send_reply(reply_token, chat_id,
+                   "พิมพ์ /check ตามด้วย Index code หรือส่งไฟล์ Excel/CSV มาก่อนแล้วพิมพ์ /check ได้เลยค่ะพี่\n"
+                   "เช่น /check C3A-001-ME01-AC-AHUS-000AHU-001",
+                   mention_user_id=user_id)
+        return
+
+    if GROUP_CHAT_ON_MENTION and is_bot_mentioned(message):
+        return handle_text(event, chat_id, user_id, strip_bot_mention(message) or "สวัสดี", mention_user_id=user_id)
+
+
 def handle_event(event, base_url=""):
     if event.get("type") != "message" or "replyToken" not in event:
         return
@@ -333,42 +446,59 @@ def handle_event(event, base_url=""):
     user_id = source.get("userId", "")
     # Groups/rooms share one memory so Ani follows the group conversation
     chat_id = source.get("groupId") or source.get("roomId") or user_id
+    if source.get("type") in ("group", "room"):
+        return handle_group_event(event, chat_id, user_id, base_url)
+
+    message = event["message"]
+    if message.get("type") == "text":
+        return handle_text(event, chat_id, user_id, message["text"].strip())
+    return handle_media(event, chat_id, user_id, base_url)
+
+
+def handle_text(event, chat_id, user_id, text, mention_user_id=None):
+    reply_token = event["replyToken"]
+
+    def send_reply(token, to, text):
+        _send_reply(token, to, text, mention_user_id=mention_user_id)
+
+    if text.lower() in RESET_COMMANDS:
+        chat_histories.pop(chat_id, None)
+        send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨")
+        return
+    codes, check_command = extract_codes(text)
+    master = obk_validator.get_master()
+    if codes and master is None:
+        if check_command:
+            send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจ Index code ให้ไม่ได้")
+            return
+        codes = []
+    if check_command and not codes:
+        send_reply(reply_token, chat_id, "พิมพ์ /check ตามด้วย Index code ได้เลยค่ะพี่ เช่น\n/check C3A-001-ME01-AC-AHUS-000AHU-001")
+        return
+    if codes:
+        report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes])
+        leftover = text
+        for c in codes:
+            leftover = leftover.replace(c, "")
+        # Only codes (or a short "check this") -> answer straight from the validator
+        if check_command or len(leftover.strip()) <= 20:
+            with chat_locks[chat_id]:
+                remember(chat_id, text, report)
+            store_chat_history_to_csv(chat_id, user_id, text, report)
+            send_reply(reply_token, chat_id, report)
+            return
+        text = f"{text}\n\n[ผลตรวจจากระบบ]\n{report}"
+    user_parts = [types.Part.from_text(text=text)]
+    history_text = text
+    return ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id)
+
+
+def handle_media(event, chat_id, user_id, base_url):
     reply_token = event["replyToken"]
     message = event["message"]
     msg_type = message.get("type")
 
-    if msg_type == "text":
-        text = message["text"].strip()
-        if text.lower() in RESET_COMMANDS:
-            chat_histories.pop(chat_id, None)
-            send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨")
-            return
-        codes, check_command = extract_codes(text)
-        master = obk_validator.get_master()
-        if codes and master is None:
-            if check_command:
-                send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจ Index code ให้ไม่ได้")
-                return
-            codes = []
-        if check_command and not codes:
-            send_reply(reply_token, chat_id, "พิมพ์ /check ตามด้วย Index code ได้เลยค่ะพี่ เช่น\n/check C3A-001-ME01-AC-AHUS-000AHU-001")
-            return
-        if codes:
-            report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes])
-            leftover = text
-            for c in codes:
-                leftover = leftover.replace(c, "")
-            # Only codes (or a short "check this") -> answer straight from the validator
-            if check_command or len(leftover.strip()) <= 20:
-                with chat_locks[chat_id]:
-                    remember(chat_id, text, report)
-                store_chat_history_to_csv(chat_id, user_id, text, report)
-                send_reply(reply_token, chat_id, report)
-                return
-            text = f"{text}\n\n[ผลตรวจจากระบบ]\n{report}"
-        user_parts = [types.Part.from_text(text=text)]
-        history_text = text
-    elif msg_type == "image":
+    if msg_type == "image":
         try:
             data, mime_type = download_line_content(message["id"])
         except requests.exceptions.RequestException as e:
@@ -391,7 +521,11 @@ def handle_event(event, base_url=""):
         send_reply(reply_token, chat_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ สติกเกอร์ และไฟล์ Excel/CSV นะคะพี่")
         return
 
-    if source.get("type") == "user":
+    return ask_ani(event, chat_id, user_id, user_parts, history_text)
+
+
+def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=None):
+    if event.get("source", {}).get("type") == "user":
         show_loading(user_id)
 
     with chat_locks[chat_id]:
@@ -409,7 +543,7 @@ def handle_event(event, base_url=""):
         else:
             store_chat_history_to_csv(chat_id, user_id, history_text, reply)
 
-    send_reply(reply_token, chat_id, reply)
+    send_reply(event["replyToken"], chat_id, reply, mention_user_id=mention_user_id)
 
 
 def verify_signature(body, signature):
