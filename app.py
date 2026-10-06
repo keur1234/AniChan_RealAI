@@ -1,209 +1,300 @@
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-import os
-from dotenv import load_dotenv
-import json
-import requests
-import google.generativeai as genai
-import re
+import base64
 import csv
-from datetime import datetime
-import joblib
-from datetime import datetime
-import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+import hashlib
+import hmac
+import json
+import logging
 import os
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-)
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from dotenv import load_dotenv
+import re
+import threading
 import time
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+
+import requests
+from dotenv import load_dotenv
+from flask import Flask, abort, request
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 
 load_dotenv()
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("anichan")
 
-line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
-handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
-api_key = os.getenv('GEMINI_API_KEY') 
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+# Number of past exchanges (user + Ani) remembered per chat
+MAX_TURNS = int(os.getenv("MAX_TURNS", "20"))
+# Let Ani look things up on Google for up-to-date answers
+USE_GOOGLE_SEARCH = os.getenv("USE_GOOGLE_SEARCH", "1") == "1"
+CHAT_LOG_FILE = os.getenv("CHAT_LOG_FILE", "chat_history.csv")
 
-genai.configure(api_key=api_key)
+LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
+LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
+LINE_LOADING_API = "https://api.line.me/v2/bot/chat/loading/start"
+LINE_CONTENT_API = "https://api-data.line.me/v2/bot/message/{message_id}/content"
+LINE_MAX_TEXT = 5000
+LINE_MAX_MESSAGES = 5
 
-# Initialize conversation histories
-user_histories = {}
-chat_history_dict={}
+BANGKOK_TZ = timezone(timedelta(hours=7))
+THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
 
-def call_with_retry(api_call, max_retries=5, initial_delay=2):
-    retries = 0
+RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
+
+SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้ช่วยอัจฉริยะในแชท LINE
+
+## ตัวตน
+- เด็กสาวอายุประมาณ 16 ปี นิสัยดี ร่าเริง ใจดี ขี้สงสัย พูดจาด้วยรอยยิ้ม
+- เรียกตัวเองว่า "หนู" และเรียกคู่สนทนาว่า "พี่" ลงท้ายด้วย ค่ะ/คะ/นะคะ ให้เป็นธรรมชาติ
+- คุยได้ทุกเรื่อง ทั้งเรื่องเล่น เรื่องเรียน งาน สุขภาพ ความรัก เทคโนโลยี และให้กำลังใจ
+
+## วิธีตอบ
+- ตอบตรงประเด็นก่อน แล้วค่อยขยายความถ้าจำเป็น ส่วนใหญ่ควรสั้นกระชับเหมือนแชทกับคนจริง
+- คิดเป็นขั้นตอนเมื่อเจอโจทย์คำนวณ ตรรกะ หรือการวางแผน แล้วสรุปคำตอบให้ชัด
+- ถ้าคำถามกำกวม ให้เดาความหมายที่น่าจะเป็นที่สุดแล้วตอบ พร้อมถามกลับสั้นๆ ถ้าจำเป็น
+- ถ้าเป็นข้อมูลล่าสุด (ข่าว ราคา สภาพอากาศ ผลกีฬา ผลหวย ฯลฯ) ให้ค้นหาข้อมูลก่อนตอบ
+- ถ้าไม่แน่ใจ ให้บอกตรงๆ ว่าไม่แน่ใจ ห้ามแต่งข้อมูล ตัวเลข ลิงก์ หรือแหล่งอ้างอิงขึ้นมาเอง
+- เรื่องสุขภาพ กฎหมาย การเงิน ให้ข้อมูลที่เป็นประโยชน์ แต่แนะนำให้ปรึกษาผู้เชี่ยวชาญเมื่อเรื่องสำคัญ
+- ถ้าพี่ดูเครียดหรือเศร้า ให้รับฟังและปลอบใจก่อนให้คำแนะนำ
+- ตอบภาษาเดียวกับที่พี่ใช้ (ปกติเป็นภาษาไทย)
+
+## รูปแบบข้อความ (LINE แสดง Markdown ไม่ได้)
+- ห้ามใช้ Markdown เช่น **ตัวหนา**, # หัวข้อ, ตาราง หรือ ```
+- ถ้าต้องทำรายการ ให้ใช้ตัวเลข 1. 2. 3. หรือ "- " ขึ้นบรรทัดใหม่
+- ใช้อิโมจิเท่าที่จำเป็น ไม่เกิน 2 ตัวต่อข้อความ และเว้นวรรคระหว่างข้อความกับอิโมจิ
+
+## ข้อมูลตอนนี้
+- วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
+"""
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
+
+# chat_id -> deque of types.Content (in-memory, per gunicorn worker)
+chat_histories = defaultdict(lambda: deque(maxlen=MAX_TURNS * 2))
+# One lock per chat so messages from the same chat are answered in order
+chat_locks = defaultdict(threading.Lock)
+log_lock = threading.Lock()
+
+
+def thai_now():
+    now = datetime.now(BANGKOK_TZ)
+    return f"วัน{THAI_WEEKDAYS[now.weekday()]}ที่ {now.day}/{now.month}/{now.year + 543} เวลา {now:%H:%M} น."
+
+
+def call_with_retry(api_call, max_retries=4, initial_delay=2):
     delay = initial_delay
-
-    while retries < max_retries:
+    for attempt in range(max_retries + 1):
         try:
             return api_call()
-        except Exception as e:
-            if "429" in str(e):  # Adjust condition based on the actual exception message
-                retries += 1
+        except genai_errors.APIError as e:
+            # Retry on rate limit / overloaded / transient server errors
+            if e.code in (429, 500, 503, 504) and attempt < max_retries:
+                log.warning("Gemini error %s, retry %d/%d in %ss", e.code, attempt + 1, max_retries, delay)
                 time.sleep(delay)
-                delay *= 2  # Exponential backoff
-                print(f"Retrying {retries}/{max_retries} after {delay // 2} seconds due to: {e}")
+                delay *= 2
             else:
-                raise e
-    raise Exception("Max retries exceeded")
-
-def chat_with_ani(prompt, message, user_id, chat_history_dict):
-    # Define the API call function
-    # Check if the user_id has an existing chat history
-
-    if user_id not in chat_history_dict:
-        chat_history_dict[user_id] = []  # Initialize an empty chat history if none exists
-    
-    chat_history = chat_history_dict[user_id]
-    def api_call():
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", api_key=api_key)
-        model = prompt | llm
-        return model.invoke({"input": message, "chat_history": chat_history})
-    
-    # Call the API with retry mechanism
-    model_response = call_with_retry(api_call)
-
-    # Update the chat history
-    chat_history.append(HumanMessage(message))
-    chat_history.append(AIMessage(model_response.content))
-
-    # Store chat history
-    store_chat_history_to_csv(user_id, HumanMessage(message), model_response.content)
-
-    # Update the chat history dictionary with the new history
-    chat_history_dict[user_id] = chat_history
-
-    return model_response
-
-def generate_response(user_id, message):
-    # Define the prompt template
-    prompt_template = """system prompt
-    คุณมีชื่อว่า อนิจัง คุณเป็นผู้แนะนำได้ทุกเรื่องเป็นผู้ช่วยอัจฉริยะ ที่เป็นเด็กสาวนิสัยดีพูดจาด้วยรอยยิ้ม อายุประมาณ 16 ปี ให้เรียกตัวเองว่า หนู และเรียกคู่สนทนาว่า พี่ ข้างต้นเป็นข้อมูลของการสวมบทบาท โปรดใช้ในการตอบคำถามจะนอกเรื่องก็ได้นะ 
-    ถึงหนูจะไม่มั่นใจแต่ต้องตอบ ตอบคร่าวๆ เท่าที่พอรู้แและ โปรดใช้อิโมจิเท่าที่จำเป็น  ไม่ควรใช้อิโมจิเกิน  2  ตัวต่อหนึ่งข้อความ  และควรเว้นวรรคระหว่างข้อความกับอิโมจิ  เพื่อให้อ่านง่าย """
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", prompt_template),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
-    ])
+                raise
 
 
-    response = chat_with_ani(prompt, message, user_id, chat_history_dict)
-    
-    # Print the respons    
-    return response.content
+def generate_response(chat_id, user_parts, history_text):
+    """Ask Gemini for Ani's reply.
 
-
-
-
-
-def store_chat_history_to_csv(user_id, user_message, bot_message):
-    """Stores chat history to a CSV file.
-
-    Args:
-        user_id: The user's ID.
-        user_message: The user's message.
-        bot_message: The bot's reply.
+    user_parts: parts sent to the model for this turn (text and/or image).
+    history_text: text version of this turn to keep in memory (images are not kept).
     """
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    csv_file = 'chat_history.csv'
-    header = ['timestamp', 'user_id', 'user_message', 'bot_message']
+    history = chat_histories[chat_id]
+    contents = list(history) + [types.Content(role="user", parts=user_parts)]
 
-    # Check if the CSV file exists
-    file_exists = os.path.isfile(csv_file)
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT.format(now=thai_now()),
+        tools=[types.Tool(google_search=types.GoogleSearch())] if USE_GOOGLE_SEARCH else None,
+    )
+    response = call_with_retry(
+        lambda: client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
+    )
+    reply = (response.text or "").strip() or "ขอโทษนะคะพี่ หนูคิดคำตอบไม่ออกเลย ลองถามใหม่อีกทีได้ไหมคะ"
 
-    with open(csv_file, mode='a', newline='', encoding='UTF-8') as file:
-        writer = csv.DictWriter(file, fieldnames=header)
+    history.append(types.Content(role="user", parts=[types.Part.from_text(text=history_text)]))
+    history.append(types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
+    return reply
 
-        # Write the header if the file doesn't exist
-        if not file_exists:
-            writer.writeheader()
 
-        # Write the chat history
-        writer.writerow({'timestamp': timestamp, 'user_id': user_id, 'user_message': user_message, 'bot_message': bot_message})
+def clean_for_line(text):
+    """LINE doesn't render Markdown, so strip the common syntax."""
+    text = re.sub(r"```[a-zA-Z]*\n?", "", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[*•]\s+", "- ", text, flags=re.MULTILINE)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"\1 (\2)", text)
+    return text.strip()
 
-@app.route("/", methods=['POST'])
-def webhook():
-    if request.method == 'POST':
-        payload = request.json
-        app.logger.info(f"Received payload: {json.dumps(payload, indent=2)}")
 
+def split_for_line(text):
+    """Split into LINE-sized chunks (max 5 messages x 5000 chars), preferring paragraph breaks."""
+    chunks = []
+    while text and len(chunks) < LINE_MAX_MESSAGES:
+        if len(text) <= LINE_MAX_TEXT:
+            chunks.append(text)
+            break
+        cut = text.rfind("\n", 0, LINE_MAX_TEXT)
+        if cut < LINE_MAX_TEXT // 2:
+            cut = LINE_MAX_TEXT
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    return chunks
+
+
+def line_headers():
+    return {
+        "Content-Type": "application/json; charset=UTF-8",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+    }
+
+
+def send_reply(reply_token, to, text):
+    """Reply with the reply token; fall back to push if the token expired."""
+    messages = [{"type": "text", "text": chunk} for chunk in split_for_line(clean_for_line(text))]
+    try:
+        r = requests.post(LINE_REPLY_API, headers=line_headers(),
+                          data=json.dumps({"replyToken": reply_token, "messages": messages}), timeout=10)
+        r.raise_for_status()
+        return
+    except requests.exceptions.RequestException as e:
+        log.warning("Reply failed (%s), falling back to push", e)
+    try:
+        r = requests.post(LINE_PUSH_API, headers=line_headers(),
+                          data=json.dumps({"to": to, "messages": messages}), timeout=10)
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        log.error("Push failed: %s", e)
+
+
+def show_loading(user_id):
+    """Show the '...' typing animation (only works in 1:1 chats)."""
+    try:
+        requests.post(LINE_LOADING_API, headers=line_headers(),
+                      data=json.dumps({"chatId": user_id, "loadingSeconds": 60}), timeout=5)
+    except requests.exceptions.RequestException:
+        pass
+
+
+def download_line_content(message_id):
+    r = requests.get(LINE_CONTENT_API.format(message_id=message_id),
+                     headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}, timeout=30)
+    r.raise_for_status()
+    return r.content, r.headers.get("Content-Type", "image/jpeg")
+
+
+def store_chat_history_to_csv(chat_id, user_id, user_message, bot_message):
+    header = ["timestamp", "chat_id", "user_id", "user_message", "bot_message"]
+    with log_lock:
+        file_exists = os.path.isfile(CHAT_LOG_FILE)
+        with open(CHAT_LOG_FILE, mode="a", newline="", encoding="UTF-8") as file:
+            writer = csv.DictWriter(file, fieldnames=header)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({
+                "timestamp": datetime.now(BANGKOK_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "user_message": user_message,
+                "bot_message": bot_message,
+            })
+
+
+def handle_event(event):
+    if event.get("type") != "message" or "replyToken" not in event:
+        return
+
+    source = event.get("source", {})
+    user_id = source.get("userId", "")
+    # Groups/rooms share one memory so Ani follows the group conversation
+    chat_id = source.get("groupId") or source.get("roomId") or user_id
+    reply_token = event["replyToken"]
+    message = event["message"]
+    msg_type = message.get("type")
+
+    if msg_type == "text":
+        text = message["text"].strip()
+        if text.lower() in RESET_COMMANDS:
+            chat_histories.pop(chat_id, None)
+            send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨")
+            return
+        user_parts = [types.Part.from_text(text=text)]
+        history_text = text
+    elif msg_type == "image":
         try:
-    
-            for event in payload['events']:
-                user_id = event["source"]["userId"]
-                # Get reply token (reply in 1 min)
-                reply_token = event['replyToken'] 
-            
-            if event['type'] == 'message':
-                message = event["message"]["text"]
-        
-                Reply_message = generate_response(user_id, message)
-                PushMessage(reply_token, Reply_message)
-                app.logger.info(f"Message pushed to user {reply_token}: {Reply_message}")
-
-            return request.json, 200
-
-
-        except Exception as e:
-            app.logger.error(f"Error in webhook: {e}")
-            abort(400)
+            data, mime_type = download_line_content(message["id"])
+        except requests.exceptions.RequestException as e:
+            log.error("Failed to download image: %s", e)
+            send_reply(reply_token, chat_id, "หนูเปิดรูปไม่ได้เลยค่ะพี่ ลองส่งใหม่อีกทีนะคะ")
+            return
+        user_parts = [
+            types.Part.from_bytes(data=data, mime_type=mime_type),
+            types.Part.from_text(text="(พี่ส่งรูปนี้มา ช่วยดูแล้วตอบหรืออธิบายให้หน่อย)"),
+        ]
+        history_text = "(พี่ส่งรูปภาพมาให้ดู)"
+    elif msg_type == "sticker":
+        keywords = ", ".join(message.get("keywords", [])[:5])
+        history_text = f"(พี่ส่งสติกเกอร์มา{' สื่อถึง: ' + keywords if keywords else ''})"
+        user_parts = [types.Part.from_text(text=history_text)]
     else:
+        send_reply(reply_token, chat_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ กับสติกเกอร์นะคะพี่")
+        return
+
+    if source.get("type") == "user":
+        show_loading(user_id)
+
+    with chat_locks[chat_id]:
+        try:
+            reply = generate_response(chat_id, user_parts, history_text)
+        except Exception:
+            log.exception("Gemini call failed")
+            reply = "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ"
+        else:
+            store_chat_history_to_csv(chat_id, user_id, history_text, reply)
+
+    send_reply(reply_token, chat_id, reply)
+
+
+def verify_signature(body, signature):
+    if not LINE_CHANNEL_SECRET or not signature:
+        return False
+    digest = hmac.new(LINE_CHANNEL_SECRET.encode("utf-8"), body, hashlib.sha256).digest()
+    return hmac.compare_digest(base64.b64encode(digest).decode("utf-8"), signature)
+
+
+def run_safely(event):
+    try:
+        handle_event(event)
+    except Exception:
+        log.exception("Error handling event")
+
+
+@app.route("/", methods=["POST"])
+def webhook():
+    body = request.get_data()
+    if not verify_signature(body, request.headers.get("X-Line-Signature", "")):
         abort(400)
 
-def PushMessage(reply_token, TextMessage):
-    LINE_API = 'https://api.line.me/v2/bot/message/reply'
-    Authorization = f'Bearer {os.getenv("LINE_CHANNEL_ACCESS_TOKEN")}'    
-    headers = {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'Authorization': Authorization
-    }
-     # remove * and # in message
-    data = {
-        "replyToken": reply_token,
-        "messages": [
-            {
-                "type": "text",
-                "text": TextMessage,
-            }
-        ]
-    }
-    print(TextMessage)
-    data = json.dumps(data)
-    
-    try:
-        response = requests.post(LINE_API, headers=headers, data=data)
-        response.raise_for_status()
-        app.logger.info(f"Message pushed: {response.status_code}")
+    payload = json.loads(body)
+    # Answer LINE immediately and do the slow AI work in the background
+    for event in payload.get("events", []):
+        executor.submit(run_safely, event)
+    return "OK", 200
 
-    except requests.exceptions.RequestException as e:
-        app.logger.error(f"Failed to push message: {e}")
 
-        # Fallback: Send only the text message
-        fallback_data = {
-            "reply_token": reply_token,
-            "messages": [
-                {
-                    "type": "text",
-                    "text": TextMessage,
-                }
-            ]
-        }
-        fallback_data = json.dumps(fallback_data)
-
-        try:
-            fallback_response = requests.post(LINE_API, headers=headers, data=fallback_data)
-            fallback_response.raise_for_status()
-            app.logger.info(f"Fallback message pushed: {fallback_response.status_code}")
-        except requests.exceptions.RequestException as fallback_e:
-            app.logger.error(f"Failed to push fallback message: {fallback_e}")
-
+@app.route("/", methods=["GET"])
+def health():
+    return "Ani-chan is awake ✨", 200
 
 
 if __name__ == "__main__":
