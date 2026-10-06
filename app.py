@@ -96,13 +96,16 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 - ถ้าต้องทำรายการ ให้ใช้ตัวเลข 1. 2. 3. หรือ "- " ขึ้นบรรทัดใหม่
 - ใช้อิโมจิเท่าที่จำเป็น ไม่เกิน 2 ตัวต่อข้อความ และเว้นวรรคระหว่างข้อความกับอิโมจิ
 
-## งานตรวจ Index Code ของ OneBangkok (OBK)
-- Index code (Asset ID) มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
+## งานตรวจ index code ของ OBK
+- index code มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
   Component(3)-Floor(3)-Space(4)-Main System(2)-Sub System(4)-Equipment(6)-Running No.(3)
   เช่น C3A-001-ME01-AC-AHUS-000AHU-001
 - ผลตรวจ: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
   TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
   TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
+- ใช้คำว่า "index code" เสมอ (ไม่ใช้ Asset ID, Index Code, รหัสทรัพย์สิน) และเรียกโครงการว่า "OBK" เสมอ (ไม่ใช้ One Bangkok / OneBangkok)
+- คุณแก้ไขรูปแบบรายงาน ข้อความของระบบ การตั้งค่า หรือโค้ดของบอทไม่ได้ ห้ามบอกว่า "ได้แก้ไข/อัปเดตแล้ว" ถ้าผู้ใช้ขอให้เปลี่ยน
+  ให้แจ้งตรงๆ ว่าต้องให้ผู้ดูแลระบบปรับ แล้วสรุปสิ่งที่ผู้ใช้ต้องการให้ชัดเจน
 - ถ้าข้อความมี "[ผลตรวจจากระบบ / system validation result]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
 - ผู้ใช้ตรวจสอบได้โดยพิมพ์ /check ตามด้วยโค้ด (ครั้งละไม่เกิน 10 โค้ด) หรือส่งไฟล์ Excel (.xlsx .xlsm .xls) หรือ CSV เพื่อตรวจสอบทั้งไฟล์ ในแชทส่วนตัวพิมพ์โค้ดหรือส่งไฟล์ได้ทันที
 
@@ -110,7 +113,7 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
 """
 
-FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วยตรวจสอบข้อมูล Index Code ของโครงการ OneBangkok (OBK) ในกลุ่ม LINE ของทีมงาน
+FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วยตรวจสอบ index code ของโครงการ OBK ในกลุ่ม LINE ของทีมงาน
 
 ## รูปแบบการสื่อสาร
 - ใช้ภาษาแบบทางการ สุภาพ กระชับ เหมือนเจ้าหน้าที่ผู้เชี่ยวชาญตอบในที่ทำงาน
@@ -118,7 +121,7 @@ FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช�
 - ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
 - ห้ามใช้ Markdown เช่น ** หรือ # หากต้องทำรายการให้ใช้ 1. 2. 3. หรือ "- "
 
-""" + LANGUAGE_RULE + "\n" + SYSTEM_PROMPT.split("## งานตรวจ Index Code", 1)[1].join(["## งานตรวจ Index Code", ""])
+""" + LANGUAGE_RULE + "\n" + SYSTEM_PROMPT.split("## งานตรวจ index code", 1)[1].join(["## งานตรวจ index code", ""])
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
@@ -152,10 +155,15 @@ def detect_language(text):
 
 def check_help(user_id):
     return tr(user_id,
-              "วิธีใช้งาน: พิมพ์ /check ตามด้วย Index Code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\n"
+              "วิธีใช้งาน: พิมพ์ /check ตามด้วย index code หรือส่งไฟล์ Excel/CSV แล้วพิมพ์ /check\n"
               "ตัวอย่าง: /check C3A-001-ME01-AC-AHUS-000AHU-001",
-              "How to use: type /check followed by an Index Code, or send an Excel/CSV file and then type /check\n"
+              "How to use: type /check followed by an index code, or send an Excel/CSV file and then type /check\n"
               "Example: /check C3A-001-ME01-AC-AHUS-000AHU-001")
+
+
+def no_reference_text(user_id):
+    return tr(user_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ index code ได้ในขณะนี้",
+              "The reference file (obk_ref_bundle.json) is not available, so index codes cannot be validated right now.")
 
 
 def tr(user_id, th, en):
@@ -405,13 +413,11 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
 
     if not obk_files.is_supported(file_name):
         log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
-        send_reply(reply_token, chat_id, tr(user_id, f"ระบบรองรับเฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี Index Code (ไฟล์ที่ได้รับ: {file_name})",
-                                             f"Only .xlsx, .xlsm, .xls and .csv files containing Index Codes are supported (received: {file_name})"))
+        send_reply(reply_token, chat_id, tr(user_id, f"ระบบรองรับเฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี index code (ไฟล์ที่ได้รับ: {file_name})",
+                                             f"Only .xlsx, .xlsm, .xls and .csv files containing index codes are supported (received: {file_name})"))
         return
     if obk_validator.get_master() is None:
-        send_reply(reply_token, chat_id, tr(user_id, tr(user_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ Index Code ได้ในขณะนี้",
-                                             "The reference file (obk_ref_bundle.json) is not available, so Index Codes cannot be validated right now."),
-                                             "The reference file (obk_ref_bundle.json) is not available, so Index Codes cannot be validated right now."))
+        send_reply(reply_token, chat_id, no_reference_text(user_id))
         return
     if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
         send_reply(reply_token, chat_id, tr(user_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้ง",
@@ -447,7 +453,7 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
 
     # Remember the summary so follow-up questions about the file make sense
     with chat_locks[chat_id]:
-        remember(chat_id, f"(ผู้ใช้ส่งไฟล์ {file_name} มาตรวจสอบ Index Code)", summary)
+        remember(chat_id, f"(ผู้ใช้ส่งไฟล์ {file_name} มาตรวจสอบ index code)", summary)
     store_chat_history_to_csv(chat_id, user_id, f"[file] {file_name}", summary)
     send_reply(reply_token, chat_id, summary, extra)
 
@@ -541,7 +547,7 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
     master = obk_validator.get_master()
     if codes and master is None:
         if check_command:
-            send_reply(reply_token, chat_id, "ยังไม่พบไฟล์อ้างอิง (obk_ref_bundle.json) ระบบจึงไม่สามารถตรวจสอบ Index Code ได้ในขณะนี้")
+            send_reply(reply_token, chat_id, no_reference_text(user_id))
             return
         codes = []
     if check_command and not codes:

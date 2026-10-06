@@ -1,4 +1,4 @@
-"""OBK Index Code validation for single codes typed in chat.
+"""OBK index code validation for single codes typed in chat.
 
 Lightweight port (no pandas) of validate_index_code.py; same rules and results.
 The reference bundle (obk_ref_bundle.json) holds project data and is NOT committed;
@@ -180,8 +180,8 @@ def check_code(code, md):
     if code != code.upper() and t != 'TYPE A':
         upper_type = apply_override(code.upper(), validate_index_code(code.upper(), md)[2])
         if upper_type == 'TYPE A':
-            result['hints'].append((f"หากแก้ไขเป็นตัวพิมพ์ใหญ่ ({code.upper()}) รหัสจะผ่านเกณฑ์ TYPE A",
-                                    f"In upper case ({code.upper()}) the code passes as TYPE A"))
+            result['hints'].append((f"หากแก้ไขเป็นตัวพิมพ์ใหญ่ ({code.upper()}) index code นี้จะผ่านเกณฑ์ TYPE A",
+                                    f"In upper case ({code.upper()}) this index code passes as TYPE A"))
     if len(parts) >= 3 and '4' in rules:
         loc = '-'.join(parts[:3])
         close = difflib.get_close_matches(loc, md['_locations'], n=3, cutoff=0.7)
@@ -219,8 +219,8 @@ def type_label(t, lang='th'):
 
 def format_report(results, lang='th'):
     """Formal plain-text report for LINE (no Markdown, no emoji)."""
-    lines = [_t(lang, "รายงานผลการตรวจสอบ Index Code", "Index Code Validation Report"), ""]
-    code_label = _t(lang, "รหัส", "Code")
+    lines = [_t(lang, "รายงานผลการตรวจสอบ index code", "Index code validation report"), ""]
+    code_label = "Index code"
     for i, r in enumerate(results, 1):
         lines.append(f"{i}. {code_label}: {r['code']}" if len(results) > 1 else f"{code_label}: {r['code']}")
         lines.append(_t(lang, "ผลการตรวจสอบ", "Result") + f": {type_label(r['TYPE'], lang)}")
@@ -236,15 +236,15 @@ def format_report(results, lang='th'):
         if r.get('category'):
             lines.append(_t(lang, "หมวดระบบ", "System category") + f": {r['category'].strip()}")
         if len(r['parts']) == 7:
-            lines.append(_t(lang, "องค์ประกอบรหัส: ", "Code parts: ")
+            lines.append(_t(lang, "องค์ประกอบ index code: ", "Index code parts: ")
                          + " | ".join(f"{n} {p}" for n, p in zip(PART_NAMES_TH, r['parts'])))
         if r['hints']:
             lines.append(_t(lang, "ข้อเสนอแนะ:", "Suggestions:"))
             lines += [f"- {h[0] if lang == 'th' else h[1]}" for h in r['hints']]
         lines.append("")
     lines.append(_t(lang,
-                    "หมายเหตุ: การตรวจสอบรหัสรายตัวไม่ครอบคลุมกฎข้อ 9 (Running Number ซ้ำ) ซึ่งต้องตรวจสอบจากไฟล์ทั้งชุด",
-                    "Note: single-code checks do not cover Rule 9 (duplicate running number), which needs the whole file."))
+                    "หมายเหตุ: การตรวจสอบ index code รายตัวไม่ครอบคลุมกฎข้อ 9 (Running Number ซ้ำ) ซึ่งต้องตรวจสอบจากไฟล์ทั้งชุด",
+                    "Note: checking single index codes does not cover Rule 9 (duplicate running number), which needs the whole file."))
     return "\n".join(lines).strip()
 
 
