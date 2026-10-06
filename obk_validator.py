@@ -6,8 +6,11 @@ point OBK_BUNDLE_PATH at it.
 """
 import difflib
 import json
+import logging
 import os
 import re
+
+log = logging.getLogger("anichan")
 
 _SUFFIX_RE = re.compile(r'\s*(?:-\s*[ATH]|-?\s*NONE)\s*$')
 
@@ -213,7 +216,9 @@ def get_master():
     """Load the reference bundle once; None if it isn't configured."""
     global _master
     if _master is None:
-        path = os.getenv("OBK_BUNDLE_PATH", "obk_ref_bundle.json")
+        path = os.getenv("OBK_BUNDLE_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "obk_ref_bundle.json")
         if os.path.isfile(path):
             _master = load_master(path)
+        else:
+            log.warning("OBK reference bundle not found at %s", path)
     return _master
