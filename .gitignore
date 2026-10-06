@@ -1,3 +1,4 @@
 .env
 chat_history.csv
 __pycache__/
+obk_ref_bundle*.json

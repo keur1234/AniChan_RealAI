@@ -19,6 +19,8 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
+import obk_validator
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -46,6 +48,8 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
 
 RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
+CHECK_COMMANDS = ("/check", "/ตรวจ", "/เช็ค")
+MAX_CODES_PER_MESSAGE = 10
 
 SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้ช่วยอัจฉริยะในแชท LINE
 
@@ -68,6 +72,16 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
 - ห้ามใช้ Markdown เช่น **ตัวหนา**, # หัวข้อ, ตาราง หรือ ```
 - ถ้าต้องทำรายการ ให้ใช้ตัวเลข 1. 2. 3. หรือ "- " ขึ้นบรรทัดใหม่
 - ใช้อิโมจิเท่าที่จำเป็น ไม่เกิน 2 ตัวต่อข้อความ และเว้นวรรคระหว่างข้อความกับอิโมจิ
+
+## งานตรวจ Index Code ของ OneBangkok (OBK)
+- Index code (Asset ID) มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
+  Component(3)-Floor(3)-Space(4)-Main System(2)-Sub System(4)-Equipment(6)-Running No.(3)
+  เช่น C3A-001-ME01-AC-AHUS-000AHU-001
+- ผลตรวจ: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
+  TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
+  TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
+- ถ้าข้อความมี "[ผลตรวจจากระบบ]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
+- พี่พิมพ์โค้ดมา หรือใช้ /check ตามด้วยโค้ด หนูจะตรวจให้ (ครั้งละไม่เกิน 10 โค้ด)
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
@@ -121,9 +135,25 @@ def generate_response(chat_id, user_parts, history_text):
     )
     reply = (response.text or "").strip() or "ขอโทษนะคะพี่ หนูคิดคำตอบไม่ออกเลย ลองถามใหม่อีกทีได้ไหมคะ"
 
-    history.append(types.Content(role="user", parts=[types.Part.from_text(text=history_text)]))
-    history.append(types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
+    remember(chat_id, history_text, reply)
     return reply
+
+
+def remember(chat_id, user_text, reply):
+    history = chat_histories[chat_id]
+    history.append(types.Content(role="user", parts=[types.Part.from_text(text=user_text)]))
+    history.append(types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
+
+
+def extract_codes(text):
+    """Returns (codes, is_check_command)."""
+    lowered = text.lower()
+    command = next((c for c in CHECK_COMMANDS if lowered.startswith(c)), None)
+    if command:
+        body = text[len(command):]
+        codes = obk_validator.find_codes(body) or body.split()
+        return codes[:MAX_CODES_PER_MESSAGE], True
+    return obk_validator.find_codes(text)[:MAX_CODES_PER_MESSAGE], False
 
 
 def clean_for_line(text):
@@ -228,6 +258,29 @@ def handle_event(event):
             chat_histories.pop(chat_id, None)
             send_reply(reply_token, chat_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨")
             return
+        codes, check_command = extract_codes(text)
+        master = obk_validator.get_master()
+        if codes and master is None:
+            if check_command:
+                send_reply(reply_token, chat_id, "ตอนนี้หนูยังไม่มีไฟล์ Reference (obk_ref_bundle.json) เลยค่ะพี่ เลยตรวจ Index code ให้ไม่ได้")
+                return
+            codes = []
+        if check_command and not codes:
+            send_reply(reply_token, chat_id, "พิมพ์ /check ตามด้วย Index code ได้เลยค่ะพี่ เช่น\n/check C3A-001-ME01-AC-AHUS-000AHU-001")
+            return
+        if codes:
+            report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes])
+            leftover = text
+            for c in codes:
+                leftover = leftover.replace(c, "")
+            # Only codes (or a short "check this") -> answer straight from the validator
+            if check_command or len(leftover.strip()) <= 20:
+                with chat_locks[chat_id]:
+                    remember(chat_id, text, report)
+                store_chat_history_to_csv(chat_id, user_id, text, report)
+                send_reply(reply_token, chat_id, report)
+                return
+            text = f"{text}\n\n[ผลตรวจจากระบบ]\n{report}"
         user_parts = [types.Part.from_text(text=text)]
         history_text = text
     elif msg_type == "image":
