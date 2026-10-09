@@ -30,7 +30,7 @@ app = Flask(__name__)
 # Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("anichan")
+log = logging.getLogger("vicky")
 
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
@@ -38,9 +38,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 # Used when the main model is out of quota (comma-separated, tried in order)
 GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.1-flash-lite").split(",") if m.strip()]
-# Number of past exchanges (user + Ani) remembered per chat
+# Number of past exchanges (user + Vicky) remembered per chat
 MAX_TURNS = int(os.getenv("MAX_TURNS", "20"))
-# Let Ani look things up on Google for up-to-date answers (needs Search quota on the API key)
+# Let Vicky look things up on Google for up-to-date answers (needs Search quota on the API key)
 USE_GOOGLE_SEARCH = os.getenv("USE_GOOGLE_SEARCH", "0") == "1"
 # After Search runs out of quota, answer without it for this long before trying again
 SEARCH_COOLDOWN_SECONDS = 3600
@@ -62,12 +62,12 @@ THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พ�
 RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
 CHECK_COMMANDS = ("/check", "/ตรวจ", "/เช็ค")
 MAX_CODES_PER_MESSAGE = 10
-# In groups Ani only answers /check, plus chat when @mentioned (set to 0 to answer /check only)
+# In groups Vicky only answers /check, plus chat when @mentioned (set to 0 to answer /check only)
 GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
 # How long a file sent in a group can still be checked with /check
 GROUP_FILE_TTL_SECONDS = int(os.getenv("GROUP_FILE_TTL_MINUTES", "60")) * 60
 
-SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วย validation index codes ของโครงการ OBK ในแชท LINE ของทีมงาน
+SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย validation index codes ของโครงการ OBK ในแชท LINE ของทีมงาน
 
 ## ขอบเขตงาน (สำคัญที่สุด)
 - หนูช่วยได้ 2 อย่างเท่านั้น:
@@ -220,7 +220,7 @@ def generate_with_fallback(contents, system_instruction):
 
 
 def generate_response(chat_id, user_parts, history_text, user_id=""):
-    """Ask Gemini for Ani's reply.
+    """Ask Gemini for Vicky's reply.
 
     user_parts: parts sent to the model for this turn (text and/or image).
     history_text: text version of this turn to keep in memory (images are not kept).
@@ -453,7 +453,7 @@ def is_bot_mentioned(message):
 
 
 def strip_bot_mention(message):
-    """Remove the '@Ani' text from a message that mentions the bot."""
+    """Remove the '@Vicky' text from a message that mentions the bot."""
     text = message.get("text", "")
     for m in sorted(message.get("mention", {}).get("mentionees", []), key=lambda m: -m.get("index", 0)):
         if m.get("isSelf"):
@@ -462,7 +462,7 @@ def strip_bot_mention(message):
 
 
 def handle_group_event(event, chat_id, user_id, base_url):
-    """Groups: stay quiet unless someone types /check (or @mentions Ani to chat)."""
+    """Groups: stay quiet unless someone types /check (or @mentions Vicky to chat)."""
     message = event["message"]
     msg_type = message.get("type")
     reply_token = event["replyToken"]
@@ -504,7 +504,7 @@ def handle_event(event, base_url=""):
 
     source = event.get("source", {})
     user_id = source.get("userId", "")
-    # Groups/rooms share one memory so Ani follows the group conversation
+    # Groups/rooms share one memory so Vicky follows the group conversation
     chat_id = source.get("groupId") or source.get("roomId") or user_id
     message = event["message"]
     log.info("Message from %s in %s chat: type=%s text=%r", user_id[-6:], source.get("type"),
@@ -583,7 +583,7 @@ def handle_media(event, chat_id, user_id, base_url):
         handle_file(event, chat_id, user_id, base_url)
         return
     elif msg_type == "sticker":
-        log.info("Sticker ignored (Ani only handles OBK validation)")
+        log.info("Sticker ignored (Vicky only handles OBK validation)")
         return
     else:
         send_reply(reply_token, chat_id, tr(user_id, "หนูรับได้เฉพาะข้อความ รูปภาพ และไฟล์ Excel/CSV สำหรับ validation index codes ค่ะ",
@@ -659,7 +659,7 @@ def download(token, name):
 
 @app.route("/", methods=["GET"])
 def health():
-    return "Ani-chan is awake ✨", 200
+    return "Vicky is awake", 200
 
 
 if __name__ == "__main__":

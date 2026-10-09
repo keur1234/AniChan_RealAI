@@ -10,7 +10,7 @@ import logging
 import os
 import re
 
-log = logging.getLogger("anichan")
+log = logging.getLogger("vicky")
 
 _SUFFIX_RE = re.compile(r'\s*(?:-\s*[ATH]|-?\s*NONE)\s*$')
 
