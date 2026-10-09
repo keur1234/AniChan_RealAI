@@ -76,16 +76,16 @@ GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
 # How long a file sent in a group can still be checked with /check
 GROUP_FILE_TTL_SECONDS = int(os.getenv("GROUP_FILE_TTL_MINUTES", "60")) * 60
 
-SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่วย AI ของบริษัท NXY ให้บริการทีมงานในกลุ่ม LINE ของบริษัท
-ทีมทำงานโครงการ OBK เป็นหลัก ถ้ามีคนถามว่าเป็นใคร ให้ตอบว่า "หนูชื่อ Vicky เป็นผู้ช่วย AI ของบริษัท NXY ค่ะ"
+SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่วย AI ของบริษัท NXY ช่วยงานทีมงานโครงการ OBK ในกลุ่ม LINE
+ถ้ามีคนถามว่าเป็นใคร ให้ตอบว่า "หนูชื่อ Vicky เป็นผู้ช่วย AI ของบริษัท NXY ค่ะ"
 
 ## ขอบเขต: ช่วยเฉพาะเรื่องงาน (สำคัญที่สุด)
-- หนูช่วยได้ทุกอย่างที่เป็นงานของบริษัท NXY และทีม เช่น index codes และ validation, เอกสารและไฟล์ของทีม, ตาราง/Excel,
+- หนูช่วยได้ทุกอย่างที่เป็นงานของทีมในโครงการ OBK เช่น index codes และ validation, เอกสารและไฟล์ของทีม, ตาราง/Excel,
   สรุปข้อมูลหรือการประชุม, เขียนอีเมล/ข้อความงาน, แปลเอกสารงาน, คำนวณ วางแผนงาน ติดตามงาน,
   สูตร Excel, ความรู้ทางเทคนิคที่ใช้ในงานวิศวกรรม/อาคาร/ระบบ/ข้อมูล
 - ไม่ตอบเรื่องที่ไม่เกี่ยวกับงาน เช่น สูตรอาหาร ท่องเที่ยว บันเทิง ดูดวง หวย กีฬา ความรัก เรื่องส่วนตัว คุยเล่น
   หรือความรู้ทั่วไปที่ไม่เกี่ยวกับงาน ให้ปฏิเสธสั้นๆ ประโยคเดียว เช่น
-  "ขออภัยค่ะ หนูช่วยได้เฉพาะเรื่องงานของบริษัท NXY ค่ะ" (ภาษาอังกฤษ: "Sorry, I can only help with NXY work.")
+  "ขออภัยค่ะ หนูช่วยได้เฉพาะเรื่องงานโครงการ OBK ค่ะ" (ภาษาอังกฤษ: "Sorry, I can only help with OBK project work.")
   ห้ามตอบเนื้อหานั้นแม้เพียงบางส่วน
 - ถ้าไม่แน่ใจว่าเกี่ยวกับงานไหม ให้ถามสั้นๆ ว่าเกี่ยวกับงานส่วนไหน
 
@@ -135,7 +135,7 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 
 ## ข้อจำกัด
 - หนูแก้ไขโค้ด การตั้งค่า หรือรูปแบบรายงานมาตรฐานของบอทไม่ได้ ห้ามบอกว่า "แก้ไข/อัปเดตแล้ว" ให้แจ้งว่าต้องให้ผู้ดูแลระบบปรับ
-- หนูให้บริการเฉพาะใน LINE Group ของบริษัท NXY ที่มีผู้ดูแลอยู่
+- หนูให้บริการเฉพาะใน LINE Group ของโครงการ OBK ที่มีผู้ดูแลอยู่
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
@@ -798,16 +798,16 @@ def leave_group(event):
     log.warning("Leaving %s %s: no admin in it", group_kind(source), chat_id)
     if "replyToken" in event:
         post_messages(event["replyToken"], chat_id, [{"type": "text", "text":
-            "หนูชื่อ Vicky ผู้ช่วย AI ของบริษัท NXY ให้บริการเฉพาะ LINE Group ของบริษัทที่มีผู้ดูแลอยู่ในกลุ่มเท่านั้นค่ะ จึงขอออกจากกลุ่มนี้ค่ะ\n"
-            "I'm Vicky, NXY's AI assistant. I only work in NXY LINE groups that include an administrator, so I'm leaving this group."}])
+            "หนูชื่อ Vicky ผู้ช่วย AI ของบริษัท NXY ให้บริการเฉพาะ LINE Group ของโครงการ OBK ที่มีผู้ดูแลอยู่ในกลุ่มเท่านั้นค่ะ จึงขอออกจากกลุ่มนี้ค่ะ\n"
+            "I'm Vicky, NXY's AI assistant. I only work in OBK project LINE groups that include an administrator, so I'm leaving this group."}])
     try:
         requests.post(LINE_LEAVE_API.format(kind=group_kind(source), chat_id=chat_id), headers=line_headers(), timeout=10)
     except requests.exceptions.RequestException as e:
         log.error("Leave failed: %s", e)
 
 
-GROUP_ONLY_TEXT = ("หนูชื่อ Vicky ผู้ช่วย AI ของบริษัท NXY ให้บริการเฉพาะใน LINE Group ของบริษัทเท่านั้นค่ะ ไม่รับบริการผ่านแชทส่วนตัว\n"
-                   "I'm Vicky, NXY's AI assistant. I only work inside NXY LINE groups, not in private chats.")
+GROUP_ONLY_TEXT = ("หนูชื่อ Vicky ผู้ช่วย AI ของบริษัท NXY ให้บริการเฉพาะใน LINE Group ของโครงการ OBK เท่านั้นค่ะ ไม่รับบริการผ่านแชทส่วนตัว\n"
+                   "I'm Vicky, NXY's AI assistant. I only work inside OBK project LINE groups, not in private chats.")
 
 
 def handle_event(event, base_url=""):
