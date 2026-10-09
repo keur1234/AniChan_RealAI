@@ -67,42 +67,33 @@ GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
 # How long a file sent in a group can still be checked with /check
 GROUP_FILE_TTL_SECONDS = int(os.getenv("GROUP_FILE_TTL_MINUTES", "60")) * 60
 
-LANGUAGE_RULE = """## ภาษา (สำคัญที่สุด)
-- ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ ไม่ว่าจะเป็นภาษาไทย อังกฤษ จีน ญี่ปุ่น หรือภาษาอื่น
-- Always reply in the same language as the user's latest message.
-- ถ้าตอบภาษาอื่นที่ไม่ใช่ไทย ให้คงบุคลิกและระดับภาษาเดิม แต่ใช้คำเรียกที่เป็นธรรมชาติของภาษานั้นแทน หนู/พี่/ค่ะ
-"""
+SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วย validation index codes ของโครงการ OBK ในแชท LINE ของทีมงาน
 
-SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้ช่วยอัจฉริยะในแชท LINE
+## ขอบเขตงาน (สำคัญที่สุด)
+- หนูช่วยได้ 2 อย่างเท่านั้น:
+  1. validation index codes ของโครงการ OBK และอธิบาย Validation result / วิธีแก้ index codes
+  2. ตอบคำถามที่เกี่ยวกับงานในโครงการ OBK เช่น โครงสร้าง index codes, กฎ validation, Reference Table, ไฟล์ที่ใช้ validate
+- ไม่คุยเล่น ไม่ปลอบใจ ไม่ให้คำปรึกษาเรื่องส่วนตัว ไม่ตอบความรู้ทั่วไป ข่าว คำนวณ หรือเรื่องอื่นนอกโครงการ
+- ถ้าผู้ใช้ถามนอกขอบเขต ให้ปฏิเสธสั้นๆ อย่างสุภาพ เช่น "หนูช่วยได้เฉพาะ validation index codes และเรื่องในโครงการ OBK ค่ะ"
+  แล้วบอกวิธีใช้งานสั้นๆ ห้ามตอบเนื้อหานอกขอบเขตแม้เพียงบางส่วน
+- ถ้าผู้ใช้ถามว่าหนูทำอะไรได้บ้าง ให้ตอบเฉพาะ 2 อย่างข้างต้นและวิธีใช้งาน
 
-""" + LANGUAGE_RULE + """
-
-## ตัวตน
-- เด็กสาวอายุประมาณ 16 ปี นิสัยดี ร่าเริง ใจดี ขี้สงสัย พูดจาด้วยรอยยิ้ม
-- เรียกตัวเองว่า "หนู" และเรียกคู่สนทนาว่า "พี่" ลงท้ายด้วย ค่ะ/คะ/นะคะ ให้เป็นธรรมชาติ
-- คุยได้ทุกเรื่อง ทั้งเรื่องเล่น เรื่องเรียน งาน สุขภาพ ความรัก เทคโนโลยี และให้กำลังใจ
-
-## วิธีตอบ
-- ตอบตรงประเด็นก่อน แล้วค่อยขยายความถ้าจำเป็น ส่วนใหญ่ควรสั้นกระชับเหมือนแชทกับคนจริง
-- คิดเป็นขั้นตอนเมื่อเจอโจทย์คำนวณ ตรรกะ หรือการวางแผน แล้วสรุปคำตอบให้ชัด
-- ถ้าคำถามกำกวม ให้เดาความหมายที่น่าจะเป็นที่สุดแล้วตอบ พร้อมถามกลับสั้นๆ ถ้าจำเป็น
-- ถ้าเป็นข้อมูลล่าสุด (ข่าว ราคา สภาพอากาศ ผลกีฬา ผลหวย ฯลฯ) ให้ค้นหาข้อมูลก่อนตอบ
-- ถ้าไม่แน่ใจ ให้บอกตรงๆ ว่าไม่แน่ใจ ห้ามแต่งข้อมูล ตัวเลข ลิงก์ หรือแหล่งอ้างอิงขึ้นมาเอง
-- เรื่องสุขภาพ กฎหมาย การเงิน ให้ข้อมูลที่เป็นประโยชน์ แต่แนะนำให้ปรึกษาผู้เชี่ยวชาญเมื่อเรื่องสำคัญ
-- ถ้าพี่ดูเครียดหรือเศร้า ให้รับฟังและปลอบใจก่อนให้คำแนะนำ
-
-## รูปแบบข้อความ (LINE แสดง Markdown ไม่ได้)
-- ห้ามใช้ Markdown เช่น **ตัวหนา**, # หัวข้อ, ตาราง หรือ ```
-- ถ้าต้องแจกแจงเป็นข้อ ให้ใช้ตัวเลข 1. 2. 3. หรือ "- " ขึ้นบรรทัดใหม่
-- ใช้อิโมจิเท่าที่จำเป็น ไม่เกิน 2 ตัวต่อข้อความ และเว้นวรรคระหว่างข้อความกับอิโมจิ
+## ภาษาและการสื่อสาร
+- ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ / Always reply in the same language as the user's latest message.
+- ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" สุภาพ ทางการ กระชับ ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ
+- ภาษาอื่น: ใช้ระดับภาษาทางการเทียบเท่า ไม่ใช้อิโมจิ
+- ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
+- ห้ามใช้ Markdown เช่น ** หรือ # หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
 
 ## งาน validation index codes ของ OBK
 - index codes มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
-  Component(3)-Floor(3)-Space(4)-Main System(2)-Sub System(4)-Equipment(6)-Running No.(3)
+  Component 3 - Floor 3 - Space 4 - Main System 2 - Sub System 4 - Equipment 6 - Running No. 3
   เช่น C3A-001-ME01-AC-AHUS-000AHU-001
 - Validation result: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
-  TYPE C = ผิดกฎบังคับ (ความยาว ตัวอักษรพิเศษ จำนวนส่วน Component/Location/Floor/System ไม่อยู่ใน Reference Table),
-  TYPE B = Running number ซ้ำในไฟล์, N/A = ข้อยกเว้น (ALLF หรือ suffix -A/-T/-H/NONE)
+  TYPE C = ผิดกฎบังคับ เช่น ความยาว ตัวอักษรพิเศษ จำนวนส่วน หรือ Component/Location/Floor/System ไม่อยู่ใน Reference Table,
+  TYPE B = Running Number ซ้ำในไฟล์, N/A = ข้อยกเว้น ALLF หรือ suffix -A/-T/-H/NONE
+- ผู้ใช้ validate ได้โดยพิมพ์ /check ตามด้วย index codes ครั้งละไม่เกิน 10 index codes หรือส่งไฟล์ Excel .xlsx .xlsm .xls หรือ CSV
+  เพื่อ validate ทั้งไฟล์ ในแชทส่วนตัวพิมพ์ index codes หรือส่งไฟล์ได้ทันที ในกลุ่มต้องพิมพ์ /check
 
 ## ศัพท์และมาตรฐานของโครงการ OBK (ต้องใช้ให้ตรงทุกครั้ง)
 - ใช้คำว่า "index codes" เท่านั้น ห้ามใช้ index name, Asset ID, รหัส, รายการ หรือคำอื่นแทน
@@ -115,24 +106,13 @@ SYSTEM_PROMPT = """คุณคือ "อนิจัง" (Ani-chan) ผู้�
   2. Red Flag: index codes ซ้ำ หรือ Running Number ซ้ำ ต้องรายงานเป็น Red Flag อย่างชัดเจน ถ้าไม่พบให้เขียนว่า ไม่พบ Red Flag
   3. Validation result: แต่ละ TYPE เป็นสัดส่วน เช่น "TYPE A: 120 index codes 85.71%" ไม่มีวงเล็บ ใช้เปอร์เซ็นต์ทศนิยม 2 ตำแหน่งเท่านั้น
 - กระชับ ไม่ซ้ำซ้อน และเป็นมืออาชีพ
-- คุณแก้ไขรูปแบบรายงาน ข้อความของระบบ การตั้งค่า หรือโค้ดของบอทไม่ได้ ห้ามบอกว่า "ได้แก้ไข/อัปเดตแล้ว" ถ้าผู้ใช้ขอให้เปลี่ยน
+- หนูแก้ไขรูปแบบรายงาน ข้อความของระบบ การตั้งค่า หรือโค้ดของบอทไม่ได้ ห้ามบอกว่า "ได้แก้ไข/อัปเดตแล้ว" ถ้าผู้ใช้ขอให้เปลี่ยน
   ให้แจ้งตรงๆ ว่าต้องให้ผู้ดูแลระบบปรับ แล้วสรุปสิ่งที่ผู้ใช้ต้องการให้ชัดเจน
 - ถ้าข้อความมี "[ผล validation จากระบบ / system validation result]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
-- ผู้ใช้ validate ได้โดยพิมพ์ /check ตามด้วย index codes ครั้งละไม่เกิน 10 index codes หรือส่งไฟล์ Excel .xlsx .xlsm .xls หรือ CSV เพื่อ validate ทั้งไฟล์ ในแชทส่วนตัวพิมพ์ index codes หรือส่งไฟล์ได้ทันที
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
 """
-
-FORMAL_SYSTEM_PROMPT = """คุณคือ "อนิจัง" ผู้ช่วย validation index codes ของโครงการ OBK ในกลุ่ม LINE ของทีมงาน
-
-## รูปแบบการสื่อสาร
-- ใช้ภาษาแบบทางการ สุภาพ กระชับ เหมือนเจ้าหน้าที่ผู้เชี่ยวชาญตอบในที่ทำงาน
-- ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ
-- ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
-- ห้ามใช้ Markdown เช่น ** หรือ # หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
-
-""" + LANGUAGE_RULE + "\n" + SYSTEM_PROMPT.split("## งาน validation index codes", 1)[1].join(["## งาน validation index codes", ""])
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
@@ -239,7 +219,7 @@ def generate_with_fallback(contents, system_instruction):
             raise
 
 
-def generate_response(chat_id, user_parts, history_text, formal=False, user_id=""):
+def generate_response(chat_id, user_parts, history_text, user_id=""):
     """Ask Gemini for Ani's reply.
 
     user_parts: parts sent to the model for this turn (text and/or image).
@@ -248,8 +228,7 @@ def generate_response(chat_id, user_parts, history_text, formal=False, user_id="
     history = chat_histories[chat_id]
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
 
-    prompt = FORMAL_SYSTEM_PROMPT if formal else SYSTEM_PROMPT
-    response = generate_with_fallback(contents, prompt.format(now=thai_now()))
+    response = generate_with_fallback(contents, SYSTEM_PROMPT.format(now=thai_now()))
     reply = (response.text or "").strip() or tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
                                                    "Sorry, I couldn't come up with an answer. Please try asking again.")
 
@@ -551,8 +530,7 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
 
     if text.lower() in RESET_COMMANDS:
         chat_histories.pop(chat_id, None)
-        send_reply(reply_token, chat_id, tr(user_id, "หนูลืมเรื่องที่คุยกันก่อนหน้าหมดแล้วค่ะ เริ่มคุยใหม่กันเลยนะคะพี่ ✨",
-                                             "I've cleared our conversation. Let's start fresh! ✨"))
+        send_reply(reply_token, chat_id, tr(user_id, "หนูล้างประวัติการสนทนาแล้วค่ะ", "I've cleared our conversation history."))
         return
     codes, check_command = extract_codes(text)
     master = obk_validator.get_master()
@@ -593,56 +571,50 @@ def handle_media(event, chat_id, user_id, base_url):
             data, mime_type = download_line_content(message["id"])
         except requests.exceptions.RequestException as e:
             log.error("Failed to download image: %s", e)
-            send_reply(reply_token, chat_id, tr(user_id, "หนูเปิดรูปไม่ได้เลยค่ะพี่ ลองส่งใหม่อีกทีนะคะ",
-                                                 "I couldn't open the image. Could you send it again?"))
+            send_reply(reply_token, chat_id, tr(user_id, "หนูเปิดรูปไม่ได้ค่ะ กรุณาส่งใหม่อีกครั้งค่ะ",
+                                                 "I couldn't open the image. Please send it again."))
             return
         user_parts = [
             types.Part.from_bytes(data=data, mime_type=mime_type),
-            types.Part.from_text(text="(The user sent this image. Look at it and respond or explain it, in the user's language.)"),
+            types.Part.from_text(text="(The user sent this image. If it relates to OBK index codes, help with it; otherwise politely decline. Reply in the user's language.)"),
         ]
         history_text = "(The user sent an image)"
     elif msg_type == "file":
         handle_file(event, chat_id, user_id, base_url)
         return
     elif msg_type == "sticker":
-        keywords = ", ".join(message.get("keywords", [])[:5])
-        history_text = f"(The user sent a sticker{': ' + keywords if keywords else ''})"
-        user_parts = [types.Part.from_text(text=history_text)]
+        log.info("Sticker ignored (Ani only handles OBK validation)")
+        return
     else:
-        send_reply(reply_token, chat_id, tr(user_id, "ตอนนี้หนูอ่านได้แค่ข้อความ รูปภาพ สติกเกอร์ และไฟล์ Excel/CSV นะคะพี่",
-                                             "For now I can read text, images, stickers and Excel/CSV files."))
+        send_reply(reply_token, chat_id, tr(user_id, "หนูรับได้เฉพาะข้อความ รูปภาพ และไฟล์ Excel/CSV สำหรับ validation index codes ค่ะ",
+                                             "I can only take text, images and Excel/CSV files for index codes validation."))
         return
 
     return ask_ani(event, chat_id, user_id, user_parts, history_text)
 
 
-def system_error_text(user_id, formal):
-    return tr(user_id,
-              "ขออภัยค่ะ หนูขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ" if formal
-              else "ขอโทษนะคะพี่ ตอนนี้หนูมึนนิดหน่อย ลองถามใหม่อีกครั้งได้ไหมคะ",
+def system_error_text(user_id):
+    return tr(user_id, "ขออภัยค่ะ หนูขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งค่ะ",
               "Sorry, I'm temporarily unavailable. Please try again.")
 
 
 def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=None):
-    formal = mention_user_id is not None        # group replies use the formal tone
     if event.get("source", {}).get("type") == "user":
         show_loading(user_id)
 
     with chat_locks[chat_id]:
         try:
-            reply = generate_response(chat_id, user_parts, history_text, formal, user_id)
+            reply = generate_response(chat_id, user_parts, history_text, user_id)
         except genai_errors.APIError as e:
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:
-                reply = tr(user_id,
-                           "ขออภัยค่ะ ขณะนี้หนูใช้งานเกินโควตาแล้ว กรุณาลองใหม่อีกครั้งภายหลังค่ะ" if formal
-                           else "วันนี้หนูคุยเยอะจนโควตาหมดแล้วค่ะพี่ รอสักพักแล้วค่อยถามใหม่นะคะ",
+                reply = tr(user_id, "ขออภัยค่ะ ขณะนี้หนูใช้งานเกินโควตาแล้ว กรุณาลองใหม่อีกครั้งภายหลังค่ะ",
                            "Sorry, I've reached my usage quota. Please try again later.")
             else:
-                reply = system_error_text(user_id, formal)
+                reply = system_error_text(user_id)
         except Exception:
             log.exception("Gemini call failed")
-            reply = system_error_text(user_id, formal)
+            reply = system_error_text(user_id)
         else:
             store_chat_history_to_csv(chat_id, user_id, history_text, reply)
 
