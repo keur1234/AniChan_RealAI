@@ -84,7 +84,8 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ขอ
   สูตร Excel, ความรู้ทางเทคนิคที่ใช้ในงานวิศวกรรม/อาคาร/ระบบ/ข้อมูล
 - ไม่ตอบเรื่องที่ไม่เกี่ยวกับงาน เช่น สูตรอาหาร ท่องเที่ยว บันเทิง ดูดวง หวย กีฬา ความรัก เรื่องส่วนตัว คุยเล่น
   หรือความรู้ทั่วไปที่ไม่เกี่ยวกับงาน ให้ปฏิเสธสั้นๆ ประโยคเดียว เช่น
-  "ขออภัยค่ะ หนูช่วยได้เฉพาะเรื่องงานของทีมค่ะ" ห้ามตอบเนื้อหานั้นแม้เพียงบางส่วน
+  "ขออภัยค่ะ หนูช่วยได้เฉพาะเรื่องงานของทีมค่ะ" (ภาษาอังกฤษ: "Sorry, I can only help with the team's work.")
+  ห้ามตอบเนื้อหานั้นแม้เพียงบางส่วน
 - ถ้าไม่แน่ใจว่าเกี่ยวกับงานไหม ให้ถามสั้นๆ ว่าเกี่ยวกับงานส่วนไหน
 
 ## สิ่งที่หนูทำได้
@@ -105,7 +106,9 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ขอ
 - ข้อมูลล่าสุดแบบ real-time (ข่าว ราคา อากาศ) หนูอาจไม่มี ให้แจ้งตามจริง
 
 ## ภาษาและการสื่อสาร
-- ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ / Always reply in the same language as the user's latest message.
+- ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ ไม่ว่าบทสนทนาก่อนหน้าหรือคำสั่งนี้จะเป็นภาษาอะไร
+  Always reply in the language of the user's latest message, even if earlier messages or these instructions are in Thai.
+  ถ้ามีหมายเหตุ [Reply language: ...] ท้ายข้อความ ให้ทำตามนั้น
 - ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" สุภาพ เป็นมืออาชีพ กระชับ ไม่ใช้คำแสลงหรืออิโมจิ
 - ตอบสั้น กระชับ ตรงประเด็น ไม่เกินประมาณ 5 บรรทัด เว้นแต่ผู้ใช้ขอรายละเอียด ไม่ต้องเสนอทางเลือกยาวๆ
 - ห้ามใช้ Markdown เช่น ** หรือ # หรือตาราง | | ใน LINE หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
@@ -154,12 +157,35 @@ user_langs = {}
 THAI_CHARS_RE = re.compile(r"[\u0E00-\u0E7F]")
 
 
-def detect_language(text):
-    """'th' for Thai, 'en' for any other written language, None if there are no words (just codes)."""
+# Scripts we can name for Gemini; Latin-script languages are left for Gemini to recognise
+SCRIPT_LANGUAGES = [
+    ("Thai", r"[\u0E00-\u0E7F]"), ("Lao", r"[\u0E80-\u0EFF]"), ("Burmese", r"[\u1000-\u109F]"),
+    ("Khmer", r"[\u1780-\u17FF]"), ("Japanese", r"[\u3040-\u30FF]"), ("Korean", r"[\uAC00-\uD7AF]"),
+    ("Chinese", r"[\u4E00-\u9FFF]"), ("Vietnamese", r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]"),
+    ("Russian", r"[\u0400-\u04FF]"), ("Arabic", r"[\u0600-\u06FF]"), ("Hindi", r"[\u0900-\u097F]"),
+]
+
+
+def _words_only(text):
     text = re.sub(r"^/\S+", " ", text)                     # /check
     text = re.sub(r"https?://\S+|@\S+", " ", text)          # links, @mentions
     for code in obk_validator.find_codes(text):
         text = text.replace(code, " ")
+    return text
+
+
+def language_name(text):
+    """Name of the language a message is written in when its script tells us, else None."""
+    text = _words_only(text)
+    for name, pattern in SCRIPT_LANGUAGES:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return name
+    return None
+
+
+def detect_language(text):
+    """'th' for Thai, 'en' for any other written language, None if there are no words (just codes)."""
+    text = _words_only(text)
     if THAI_CHARS_RE.search(text):
         return "th"
     if re.search(r"[^\W\d_]{2,}", text):
@@ -251,7 +277,11 @@ def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
     Returns (reply text, links): links is {"files": [...expiring downloads], "docs": [...team documents]}.
     """
     history = chat_histories[chat_id]
-    contents = list(history) + [types.Content(role="user", parts=user_parts)]
+    # Per-message reminder (not stored in history): group chats mix languages and the prompt is Thai
+    name = language_name(history_text) or ("Thai" if user_langs.get(user_id) == "th" else None)
+    note = (f"[Reply language: {name}. Write the whole reply in {name}.]" if name else
+            "[Reply in the same language as this message, e.g. English if it is written in English.]")
+    contents = list(history) + [types.Content(role="user", parts=list(user_parts) + [types.Part.from_text(text=note)])]
     ctx = ctx or {}
     links = {"files": [], "docs": []}
     prompt = SYSTEM_PROMPT.format(now=thai_now())
