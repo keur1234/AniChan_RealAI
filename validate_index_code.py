@@ -405,6 +405,7 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet'):
         'types': {t: {'count': int(vc.get(t, 0)), 'pct': pct(vc.get(t, 0))} for t in all_types(review)},
         'duplicates': len(dups), 'dup_mode': dup_mode, 'room': room,
         'duplicate_codes_total': int((dup['Dup Count'] > 1).sum()),
+        'type_c_codes': asset[asset['TYPE'] == 'TYPE C']['Asset ID'].head(10).tolist(),
         'duplicate_codes': dup[dup['Dup Count'] > 1].sort_values('Dup Count', ascending=False)[['Asset ID', 'Dup Count']].head(10).values.tolist(),
         'top_rules_unique_assets': rule_counter.most_common(8),
         'worst_sheets': worst[['Source Sheet', 'TYPE A %', 'TOTAL']].to_dict('records'),

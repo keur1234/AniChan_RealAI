@@ -204,9 +204,15 @@ def pct_text(n, total):
 TYPE_ORDER = ['TYPE A', 'TYPE B', 'TYPE B OR C', 'TYPE C', 'N/A']
 
 
-def summary_lines(total, dup_count, dup_lines, running_dup_count, type_counts, lang='th'):
-    """The agreed summary: total index codes, Red Flag, Validation result."""
+def summary_lines(total, dup_count, dup_lines, running_dup_count, type_counts, type_c_codes=(), lang='th'):
+    """The agreed summary: total index codes, Red Flag (TYPE C and duplicates), Validation result."""
     lines = [_t(lang, f"index codes ทั้งหมด: {total:,}", f"Total index codes: {total:,}"), "", "Red Flag"]
+    type_c = type_counts.get('TYPE C', 0)
+    lines.append(f"- TYPE C: {type_c:,} index codes")
+    lines += [f"  {c}" for c in type_c_codes]
+    if type_c > len(type_c_codes) and type_c_codes:
+        lines.append(_t(lang, f"  และอีก {type_c - len(type_c_codes):,} index codes ดูในไฟล์ผล validation",
+                        f"  and {type_c - len(type_c_codes):,} more index codes in the validation result file"))
     if dup_count:
         lines.append(_t(lang, f"- พบ index codes ซ้ำ: {dup_count:,} index codes",
                         f"- Duplicate index codes: {dup_count:,} index codes"))
@@ -214,8 +220,6 @@ def summary_lines(total, dup_count, dup_lines, running_dup_count, type_counts, l
     if running_dup_count:
         lines.append(_t(lang, f"- พบ Running Number ซ้ำ TYPE B: {running_dup_count:,} index codes",
                         f"- Duplicate running numbers TYPE B: {running_dup_count:,} index codes"))
-    if not dup_count and not running_dup_count:
-        lines.append(_t(lang, "- ไม่พบ Red Flag", "- No Red Flag found"))
     lines += ["", "Validation result"]
     order = TYPE_ORDER + [t for t in type_counts if t not in TYPE_ORDER]
     for typ in order:
@@ -235,7 +239,8 @@ def format_report(results, lang='th'):
 
     lines = [_t(lang, "ผล validation index codes", "Index codes validation result")]
     dup_lines = [_t(lang, f"  {c} ซ้ำ {seen[c]} ครั้ง", f"  {c} appears {seen[c]} times") for c in dup_codes]
-    lines += summary_lines(total, len(dup_codes), dup_lines, 0, type_counts, lang)
+    type_c_codes = list(dict.fromkeys(r['code'] for r in results if r['TYPE'] == 'TYPE C'))
+    lines += summary_lines(total, len(dup_codes), dup_lines, 0, type_counts, type_c_codes, lang)
     lines += ["", _t(lang, "รายละเอียด", "Details")]
     unique = list({r['code']: r for r in results}.values())
     for i, r in enumerate(unique, 1):

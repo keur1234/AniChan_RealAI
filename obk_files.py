@@ -108,5 +108,5 @@ def format_summary(result, file_name, lang='th'):
     lines = [t("ผล validation index codes", "Index codes validation result"), t("ไฟล์: ", "File: ") + file_name]
     dup_lines = [t(f"  {code} ซ้ำ {n} ครั้ง", f"  {code} appears {n} times") for code, n in result.get('duplicate_codes', [])]
     lines += obk_validator.summary_lines(result['records'], result.get('duplicate_codes_total', 0), dup_lines,
-                                         type_counts.get('TYPE B', 0), type_counts, lang)
+                                         type_counts.get('TYPE B', 0), type_counts, result.get('type_c_codes', []), lang)
     return "\n".join(lines)
