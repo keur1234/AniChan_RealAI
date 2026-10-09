@@ -110,3 +110,106 @@ def format_summary(result, file_name, lang='th'):
     lines += obk_validator.summary_lines(result['records'], result.get('duplicate_codes_total', 0), dup_lines,
                                          type_counts.get('TYPE B', 0), type_counts, result.get('type_c_codes', []), lang)
     return "\n".join(lines)
+
+
+TYPE_COLUMNS = ['TYPE A', 'TYPE B', 'TYPE B OR C', 'TYPE C', 'N/A']
+
+
+def _reason_display(text, lang):
+    return "; ".join(obk_validator.reason_text(r) for r in str(text).split('; ') if r and r != 'nan')
+
+
+def _pivot(df, by):
+    """index codes per TYPE for each value of `by`, plus totals and TYPE A share."""
+    import pandas as pd
+    table = pd.crosstab(df[by].fillna('-').astype(str), df['TYPE'])
+    types = [t for t in TYPE_COLUMNS if t in table.columns] + [t for t in table.columns if t not in TYPE_COLUMNS]
+    table = table.reindex(columns=types, fill_value=0)
+    table['Total index codes'] = table.sum(axis=1)
+    table['TYPE A %'] = (table.get('TYPE A', 0) / table['Total index codes']).fillna(0)
+    return table.reset_index().rename(columns={by: by if by != 'Asset Category Full name' else 'Asset Category'})
+
+
+def build_summary_workbook(result, file_name, lang='th'):
+    """Excel summary table of a validated raw data file. Returns its path (next to the other outputs)."""
+    import pandas as pd
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    main_path = next(p for p in result['outputs'] if p.endswith('_output.xlsx'))
+    df = pd.read_excel(main_path, sheet_name='Sheet1')
+    total = len(df)
+    type_counts = df['TYPE'].value_counts()
+    dup = df[df['Dup Count'].fillna(0) > 1].drop_duplicates('Asset ID')
+    reason_col = 'validation_result_thai' if lang == 'th' else 'validation_result'
+
+    summary_rows = [
+        ['File', file_name],
+        ['Total index codes', total],
+        ['Incorrect - TYPE C', int(type_counts.get('TYPE C', 0))],
+        ['Incorrect - duplicate index codes', len(dup)],
+        ['Incorrect - duplicate running numbers TYPE B', int(type_counts.get('TYPE B', 0))],
+    ]
+    validation_rows = [[t, int(type_counts.get(t, 0)), type_counts.get(t, 0) / total if total else 0]
+                       for t in TYPE_COLUMNS + [t for t in type_counts.index if t not in TYPE_COLUMNS]
+                       if type_counts.get(t, 0)]
+
+    incorrect = df[df['TYPE'] == 'TYPE C'].drop_duplicates('Asset ID')
+    incorrect = pd.DataFrame({
+        'index codes': incorrect['Asset ID'],
+        'Source Sheet': incorrect['Source Sheet'],
+        'Rules': incorrect['Rules'],
+        'Reason': incorrect[reason_col].map(lambda r: _reason_display(r, lang)),
+    })
+    duplicates = pd.DataFrame({
+        'index codes': dup['Asset ID'],
+        'Times found': dup['Dup Count'].astype(int),
+        'Source Sheets': dup['Source Sheets'],
+    }).sort_values('Times found', ascending=False)
+
+    sheets = [
+        ('By Sheet', _pivot(df, 'Source Sheet')),
+        ('By Category', _pivot(df, 'Asset Category Full name')),
+        ('By Component', _pivot(df, 'Component')),
+        ('Incorrect TYPE C', incorrect),
+        ('Duplicates', duplicates),
+    ]
+
+    stem = os.path.splitext(os.path.basename(file_name))[0]
+    path = os.path.join(os.path.dirname(main_path), f"{stem}_summary.xlsx")
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+
+    with pd.ExcelWriter(path, engine='openpyxl') as w:
+        # Summary sheet: key figures, then the Validation result table
+        pd.DataFrame(summary_rows).to_excel(w, sheet_name='Summary', index=False, header=False)
+        start = len(summary_rows) + 1
+        pd.DataFrame(validation_rows, columns=['Validation result', 'index codes', 'Share']).to_excel(
+            w, sheet_name='Summary', index=False, startrow=start)
+        ws = w.sheets['Summary']
+        for row in ws.iter_rows(min_row=1, max_row=len(summary_rows)):
+            row[0].font = Font(bold=True)
+        for cell in ws[start + 1]:
+            cell.font, cell.fill = header_font, header_fill
+        for row in ws.iter_rows(min_row=start + 2, max_row=start + 1 + len(validation_rows), min_col=3, max_col=3):
+            row[0].number_format = '0.00%'
+
+        for name, data in sheets:
+            data.to_excel(w, sheet_name=name, index=False)
+            ws = w.sheets[name]
+            ws.freeze_panes = 'A2'
+            if data.shape[1]:
+                ws.auto_filter.ref = ws.dimensions
+            for cell in ws[1]:
+                cell.font, cell.fill = header_font, header_fill
+                cell.alignment = Alignment(wrap_text=True, vertical='center')
+            if 'TYPE A %' in data.columns:
+                col = get_column_letter(list(data.columns).index('TYPE A %') + 1)
+                for cell in ws[col][1:]:
+                    cell.number_format = '0.00%'
+
+        for ws in w.book.worksheets:
+            for col in ws.columns:
+                width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+                ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(width + 2, 10), 60)
+    return path

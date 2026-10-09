@@ -52,6 +52,8 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 LINE_LOADING_API = "https://api.line.me/v2/bot/chat/loading/start"
+LINE_MEMBER_API = "https://api.line.me/v2/bot/{kind}/{chat_id}/member/{user_id}"
+LINE_LEAVE_API = "https://api.line.me/v2/bot/{kind}/{chat_id}/leave"
 LINE_CONTENT_API = "https://api-data.line.me/v2/bot/message/{message_id}/content"
 LINE_MAX_TEXT = 5000
 LINE_MAX_MESSAGES = 5
@@ -61,6 +63,13 @@ THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พ�
 
 RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
 CHECK_COMMANDS = ("/check", "/ตรวจ", "/เช็ค")
+SUMMARY_COMMANDS = ("/summary", "/สรุป")
+# Words that ask for the summary table when Vicky is @mentioned
+SUMMARY_WORDS = ("ตารางสรุป", "สรุป", "summary")
+# LINE user IDs of the people responsible for Vicky. She only serves groups that
+# include one of them, and only they can use her in a 1:1 chat.
+ADMIN_USER_IDS = {u.strip() for u in os.getenv("ADMIN_USER_IDS", "").split(",") if u.strip()}
+GROUP_CHECK_TTL_SECONDS = 600
 MAX_CODES_PER_MESSAGE = 10
 # In groups Vicky only answers /check, plus chat when @mentioned (set to 0 to answer /check only)
 GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
@@ -93,7 +102,10 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย validatio
   TYPE C = ผิดกฎบังคับ เช่น ความยาว ตัวอักษรพิเศษ จำนวนส่วน หรือ Component/Location/Floor/System ไม่อยู่ใน Reference Table,
   TYPE B = Running Number ซ้ำในไฟล์, N/A = ข้อยกเว้น ALLF หรือ suffix -A/-T/-H/NONE
 - ผู้ใช้ validate ได้โดยพิมพ์ /check ตามด้วย index codes ครั้งละไม่เกิน 10 index codes หรือส่งไฟล์ Excel .xlsx .xlsm .xls หรือ CSV
-  เพื่อ validate ทั้งไฟล์ ในแชทส่วนตัวพิมพ์ index codes หรือส่งไฟล์ได้ทันที ในกลุ่มต้องพิมพ์ /check
+  เพื่อ validate ทั้งไฟล์ ในกลุ่มต้องพิมพ์ /check
+- ขอตารางสรุป Raw Data เป็นไฟล์ Excel ได้โดยพิมพ์ /summary หรือ @Vicky ขอตารางสรุป หลังส่งไฟล์ Raw Data
+  ระบบจะส่งลิงก์ไฟล์ Excel ให้เอง ห้ามสร้างตารางสรุปหรือตัวเลขเอง
+- หนูให้บริการเฉพาะใน LINE Group ของโครงการ OBK ที่มีผู้ดูแลอยู่ ไม่รับแชทส่วนตัว
 
 ## ศัพท์และมาตรฐานของโครงการ OBK (ต้องใช้ให้ตรงทุกครั้ง)
 - ใช้คำว่า "index codes" เท่านั้น ห้ามใช้ index name, Asset ID, รหัส, รายการ หรือคำอื่นแทน
@@ -377,14 +389,15 @@ def remember_group_file(chat_id, user_id, message):
         for key in [k for k, v in pending_files_by_user.items() if now - v["time"] > GROUP_FILE_TTL_SECONDS]:
             pending_files_by_user.pop(key, None)
         pending_files_by_user[(chat_id, user_id)] = info
+        pending_files_by_user[(chat_id, None)] = info          # latest file in the chat
         pending_files_by_id[message["id"]] = info
 
 
 def find_group_file(chat_id, user_id, quoted_message_id):
-    """The file a /check refers to: the quoted file, else this person's latest file in the chat."""
+    """The file a command refers to: the quoted file, else this person's latest file, else the chat's latest."""
     with pending_lock:
         info = pending_files_by_id.get(quoted_message_id) if quoted_message_id else None
-        info = info or pending_files_by_user.get((chat_id, user_id))
+        info = info or pending_files_by_user.get((chat_id, user_id)) or pending_files_by_user.get((chat_id, None))
     if info and time.time() - info["time"] <= GROUP_FILE_TTL_SECONDS:
         return info
     return None
@@ -393,26 +406,23 @@ def find_group_file(chat_id, user_id, quoted_message_id):
 _send_reply = send_reply
 
 
-def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id=None):
+def validate_line_file(event, chat_id, user_id, message, send_reply):
+    """Download and validate a LINE file. Returns (file_name, result, token), or None after telling the user why not."""
     reply_token = event["replyToken"]
-    message = message or event["message"]
     file_name = obk_files.safe_name(message.get("fileName", ""))
-
-    def send_reply(token, to, text, extra=()):
-        _send_reply(token, to, text, extra, mention_user_id=mention_user_id)
 
     if not obk_files.is_supported(file_name):
         log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
         send_reply(reply_token, chat_id, tr(user_id, f"หนู validate ได้เฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี index codes ค่ะ ไฟล์ที่ได้รับ: {file_name}",
                                              f"I can only validate .xlsx, .xlsm, .xls and .csv files containing index codes. File received: {file_name}"))
-        return
+        return None
     if obk_validator.get_master() is None:
         send_reply(reply_token, chat_id, no_reference_text(user_id))
-        return
+        return None
     if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
         send_reply(reply_token, chat_id, tr(user_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB ค่ะ กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้งค่ะ",
                                              f"The file is larger than {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB. Please split it and send it again."))
-        return
+        return None
 
     if event.get("source", {}).get("type") == "user":
         show_loading(user_id)
@@ -423,29 +433,79 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
         log.exception("File validation failed")
         send_reply(reply_token, chat_id, tr(user_id, f"หนูไม่สามารถเปิดไฟล์ {file_name} เพื่อ validate ได้ค่ะ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาแก้ไขแล้วส่งใหม่อีกครั้งค่ะ",
                                              f"I couldn't open {file_name} to validate it. The file may be corrupted or password-protected. Please fix it and send it again."))
-        return
+        return None
+    return file_name, result, token
 
+
+def download_links(user_id, base_url, token, paths):
+    hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
+    links = [f"- {os.path.basename(p)}\n{base_url}/files/{token}/{quote(os.path.basename(p))}" for p in paths]
+    return tr(user_id, f"\n\nดาวน์โหลดไฟล์ ลิงก์มีอายุ {hours} ชั่วโมง\n",
+              f"\n\nDownload, links expire in {hours} hours\n") + "\n".join(links)
+
+
+def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id=None):
+    message = message or event["message"]
+
+    def send_reply(token, to, text, extra=()):
+        _send_reply(token, to, text, extra, mention_user_id=mention_user_id)
+
+    validated = validate_line_file(event, chat_id, user_id, message, send_reply)
+    if not validated:
+        return
+    file_name, result, token = validated
     summary = obk_files.format_summary(result, file_name, user_langs.get(user_id, "th"))
     extra = []
     if not result.get("skipped"):
-        links = []
-        for path in result.get("outputs", []):
-            name = os.path.basename(path)
-            url = f"{base_url}/files/{token}/{quote(name)}"
-            if name.endswith(".png"):
+        outputs = result.get("outputs", [])
+        for path in outputs:
+            if path.endswith(".png"):
+                url = f"{base_url}/files/{token}/{quote(os.path.basename(path))}"
                 extra.append({"type": "image", "originalContentUrl": url, "previewImageUrl": url})
-            else:
-                links.append(f"- {name}\n{url}")
-        if links:
-            hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
-            summary += tr(user_id, f"\n\nดาวน์โหลดไฟล์ผล validation ลิงก์มีอายุ {hours} ชั่วโมง\n",
-                          f"\n\nDownload the validation results, links expire in {hours} hours\n") + "\n".join(links)
+        summary += download_links(user_id, base_url, token, [p for p in outputs if not p.endswith(".png")])
 
     # Remember the summary so follow-up questions about the file make sense
     with chat_locks[chat_id]:
         remember(chat_id, f"(ผู้ใช้ส่งไฟล์ {file_name} มา validate index codes)", summary)
     store_chat_history_to_csv(chat_id, user_id, f"[file] {file_name}", summary)
-    send_reply(reply_token, chat_id, summary, extra)
+    send_reply(event["replyToken"], chat_id, summary, extra)
+
+
+def handle_summary(event, chat_id, user_id, base_url, mention_user_id=None):
+    """Validate the referenced raw data file and send back an Excel summary table."""
+    def send_reply(token, to, text, extra=()):
+        _send_reply(token, to, text, extra, mention_user_id=mention_user_id)
+
+    file_info = find_group_file(chat_id, user_id, event["message"].get("quotedMessageId"))
+    if not file_info:
+        send_reply(event["replyToken"], chat_id, tr(
+            user_id,
+            "กรุณาส่งไฟล์ Raw Data ก่อน แล้วพิมพ์ /summary หรือตอบกลับไฟล์นั้นด้วย /summary ค่ะ",
+            "Please send the raw data file first, then type /summary or reply to that file with /summary."))
+        return
+    validated = validate_line_file(event, chat_id, user_id, file_info, send_reply)
+    if not validated:
+        return
+    file_name, result, token = validated
+    lang = user_langs.get(user_id, "th")
+    text = obk_files.format_summary(result, file_name, lang)
+    if not result.get("skipped"):
+        try:
+            path = obk_files.build_summary_workbook(result, file_name, lang)
+        except Exception:
+            log.exception("Summary workbook failed")
+            send_reply(event["replyToken"], chat_id, system_error_text(user_id))
+            return
+        text = tr(user_id, "ตารางสรุป Raw Data\n", "Raw data summary table\n") + text + download_links(user_id, base_url, token, [path])
+    store_chat_history_to_csv(chat_id, user_id, f"[summary] {file_name}", text)
+    send_reply(event["replyToken"], chat_id, text)
+
+
+def is_summary_request(text, mentioned):
+    lowered = text.lower()
+    if lowered.startswith(SUMMARY_COMMANDS):
+        return True
+    return mentioned and any(w in lowered for w in SUMMARY_WORDS)
 
 
 def is_bot_mentioned(message):
@@ -481,6 +541,9 @@ def handle_group_event(event, chat_id, user_id, base_url):
         send_reply(reply_token, chat_id, tr(user_id, "หนูล้างประวัติการสนทนาของกลุ่มนี้แล้วค่ะ", "This group's conversation history has been cleared."), mention_user_id=user_id)
         return
 
+    if is_summary_request(text, is_bot_mentioned(message)):
+        return handle_summary(event, chat_id, user_id, base_url, mention_user_id=user_id)
+
     codes, check_command = extract_codes(text)
     if check_command:
         if codes:
@@ -498,12 +561,84 @@ def handle_group_event(event, chat_id, user_id, base_url):
     log.info("Group text ignored (only /check or @mention get a reply)")
 
 
+def group_kind(source):
+    return "room" if source.get("type") == "room" else "group"
+
+
+_group_access = {}          # chat_id -> (allowed, checked_at)
+
+
+def group_has_admin(source):
+    """True if one of ADMIN_USER_IDS is in this group. Unknown (API error) counts as allowed."""
+    if not ADMIN_USER_IDS:
+        return True
+    chat_id = source.get("groupId") or source.get("roomId")
+    cached = _group_access.get(chat_id)
+    if cached and time.time() - cached[1] < GROUP_CHECK_TTL_SECONDS:
+        return cached[0]
+    for admin in ADMIN_USER_IDS:
+        try:
+            r = requests.get(LINE_MEMBER_API.format(kind=group_kind(source), chat_id=chat_id, user_id=admin),
+                             headers=line_headers(), timeout=10)
+        except requests.exceptions.RequestException as e:
+            log.warning("Could not check group members (%s); allowing for now", e)
+            return True
+        if r.status_code == 200:
+            _group_access[chat_id] = (True, time.time())
+            return True
+        if r.status_code != 404:
+            log.warning("Member check returned %s: %s; allowing for now", r.status_code, r.text[:200])
+            return True
+    _group_access[chat_id] = (False, time.time())
+    return False
+
+
+def leave_group(event):
+    """Explain and leave a group that has no admin in it."""
+    source = event.get("source", {})
+    chat_id = source.get("groupId") or source.get("roomId")
+    log.warning("Leaving %s %s: no admin in it", group_kind(source), chat_id)
+    if "replyToken" in event:
+        post_messages(event["replyToken"], chat_id, [{"type": "text", "text":
+            "หนูให้บริการเฉพาะ LINE Group ของโครงการ OBK ที่มีผู้ดูแลอยู่ในกลุ่มเท่านั้นค่ะ จึงขอออกจากกลุ่มนี้ค่ะ\n"
+            "Vicky only works in OBK LINE groups that include an administrator, so I'm leaving this group."}])
+    try:
+        requests.post(LINE_LEAVE_API.format(kind=group_kind(source), chat_id=chat_id), headers=line_headers(), timeout=10)
+    except requests.exceptions.RequestException as e:
+        log.error("Leave failed: %s", e)
+
+
+GROUP_ONLY_TEXT = ("หนูให้บริการเฉพาะใน LINE Group ของโครงการ OBK เท่านั้นค่ะ ไม่รับบริการผ่านแชทส่วนตัว\n"
+                   "Vicky only works inside OBK LINE groups, not in private chats.")
+
+
 def handle_event(event, base_url=""):
+    source = event.get("source", {})
+    user_id = source.get("userId", "")
+    in_group = source.get("type") in ("group", "room")
+
+    if event.get("type") == "follow" and "replyToken" in event:          # someone added Vicky as a friend
+        if user_id not in ADMIN_USER_IDS:
+            post_messages(event["replyToken"], user_id, [{"type": "text", "text": GROUP_ONLY_TEXT}])
+        return
+    if event.get("type") == "join" and in_group:                          # Vicky was added to a group
+        if not group_has_admin(source):
+            leave_group(event)
+        return
     if event.get("type") != "message" or "replyToken" not in event:
         return
 
-    source = event.get("source", {})
-    user_id = source.get("userId", "")
+    if in_group and not group_has_admin(source):
+        return leave_group(event)
+    if not in_group and user_id not in ADMIN_USER_IDS:
+        message = event["message"]
+        if message.get("type") == "text" and message["text"].strip().lower() == "/myid":
+            post_messages(event["replyToken"], user_id, [{"type": "text", "text": f"Your LINE user ID: {user_id}"}])
+        else:
+            post_messages(event["replyToken"], user_id, [{"type": "text", "text": GROUP_ONLY_TEXT}])
+        log.info("Private chat from non-admin %s refused", user_id[-6:])
+        return
+
     # Groups/rooms share one memory so Vicky follows the group conversation
     chat_id = source.get("groupId") or source.get("roomId") or user_id
     message = event["message"]
@@ -517,7 +652,11 @@ def handle_event(event, base_url=""):
         return handle_group_event(event, chat_id, user_id, base_url)
 
     message = event["message"]
+    if message.get("type") == "file":
+        remember_group_file(chat_id, user_id, message)
     if message.get("type") == "text":
+        if is_summary_request(message["text"].strip(), True):
+            return handle_summary(event, chat_id, user_id, base_url)
         return handle_text(event, chat_id, user_id, message["text"].strip())
     return handle_media(event, chat_id, user_id, base_url)
 
