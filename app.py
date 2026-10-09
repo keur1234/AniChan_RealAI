@@ -21,6 +21,7 @@ from google.genai import types
 from urllib.parse import quote
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import docs_library
 import obk_files
 import obk_validator
 import vicky_tools
@@ -65,8 +66,6 @@ THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พ�
 RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
 CHECK_COMMANDS = ("/check", "/ตรวจ", "/เช็ค")
 SUMMARY_COMMANDS = ("/summary", "/สรุป")
-# Words that ask for the summary table when Vicky is @mentioned
-SUMMARY_WORDS = ("ตารางสรุป", "สรุป", "summary")
 # LINE user IDs of the people responsible for Vicky. She only serves groups that
 # include one of them, and only they can use her in a 1:1 chat.
 ADMIN_USER_IDS = {u.strip() for u in os.getenv("ADMIN_USER_IDS", "").split(",") if u.strip()}
@@ -83,6 +82,8 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ขอ
 - ตอบคำถามและช่วยงานได้ทุกเรื่อง เช่น อธิบาย สรุป เขียนข้อความ/อีเมล แปลภาษา คำนวณ วางแผน วิเคราะห์ข้อมูล
 - สร้างไฟล์ให้ผู้ใช้เมื่อขอ ด้วยเครื่องมือ create_excel_file (ตาราง Excel) หรือ create_text_file (.csv .txt .md .json)
   ระบบจะแนบลิงก์ดาวน์โหลดท้ายข้อความให้เอง ห้ามพิมพ์ลิงก์หรือแต่งลิงก์ขึ้นมาเอง
+- เอกสารที่ทีมมีอยู่แล้ว (เช่น Raw file summary, Final Validation summary) ให้ใช้ find_document_links ค้นและส่งลิงก์
+  ทุกครั้งที่ผู้ใช้ขอเอกสาร ตาราง หรือไฟล์ ให้ค้นด้วย find_document_links ก่อน ถ้าไม่พบจึงสร้างไฟล์ใหม่หรือถามผู้ใช้
 - อ่านไฟล์ Excel/CSV ที่ผู้ใช้ส่งมาในแชทด้วย read_raw_data_file เพื่อตอบคำถามหรือทำตารางตามที่ขอ
 - รันโปรแกรม validation index codes ของ OBK เฉพาะเมื่อผู้ใช้ขอให้ตรวจ/validate เท่านั้น ด้วย validate_index_codes,
   validate_raw_data_file หรือ summarize_raw_data_file (ตารางสรุป Raw Data มาตรฐานเป็นไฟล์ Excel)
@@ -104,7 +105,8 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ขอ
 - Validation result: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
   TYPE C = ผิดกฎบังคับ เช่น ความยาว ตัวอักษรพิเศษ จำนวนส่วน หรือ Component/Location/Floor/System ไม่อยู่ใน Reference Table,
   TYPE B = Running Number ซ้ำในไฟล์, N/A = ข้อยกเว้น ALLF หรือ suffix -A/-T/-H/NONE
-- คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อขอตารางสรุป Raw Data
+- คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
+  /docs เพื่อดูรายชื่อเอกสารของทีม
 
 ## ศัพท์ของโครงการ OBK (เมื่อพูดเรื่อง index codes ต้องใช้ให้ตรง)
 - ใช้คำว่า "index codes" ไม่ใช้ index name, Asset ID, รหัส หรือ รายการ แทน
@@ -231,11 +233,14 @@ MAX_TOOL_ROUNDS = 5
 
 
 def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
-    """Ask Gemini for Vicky's reply, running any tools she calls. Returns (reply text, download links)."""
+    """Ask Gemini for Vicky's reply, running any tools she calls.
+
+    Returns (reply text, links): links is {"files": [...expiring downloads], "docs": [...team documents]}.
+    """
     history = chat_histories[chat_id]
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
     ctx = ctx or {}
-    links = []
+    links = {"files": [], "docs": []}
     prompt = SYSTEM_PROMPT.format(now=thai_now())
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -247,13 +252,14 @@ def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
         parts = []
         for call in calls:
             result = run_tool(call.name, dict(call.args or {}), ctx)
-            links += result.pop("_links", [])
+            links["files"] += result.pop("_links", [])
+            links["docs"] += result.pop("_doc_links", [])
             parts.append(types.Part.from_function_response(name=call.name, response=result))
         contents.append(types.Content(role="user", parts=parts))
 
     text = "".join(p.text for p in (response.candidates[0].content.parts or []) if getattr(p, "text", None) and not p.thought) \
         if response.candidates and response.candidates[0].content else ""
-    reply = text.strip() or (tr(user_id, "หนูดำเนินการให้เรียบร้อยแล้วค่ะ", "Done.") if links else
+    reply = text.strip() or (tr(user_id, "หนูดำเนินการให้เรียบร้อยแล้วค่ะ", "Done.") if links["files"] or links["docs"] else
                              tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
                                 "Sorry, I couldn't come up with an answer. Please try asking again."))
     remember(chat_id, history_text, reply)
@@ -273,6 +279,12 @@ def run_tool(name, args, ctx):
             else:
                 path = vicky_tools.create_text(out_dir, args.get("file_name"), args.get("content", ""))
             return {"ok": True, "file": os.path.basename(path), "_links": [file_link(ctx, token, path)]}
+
+        if name == "find_document_links":
+            docs = docs_library.search(args.get("query", ""))
+            if not docs:
+                return {"found": [], "available": [d["name"] for d in docs_library.load()]}
+            return {"found": [d["name"] for d in docs], "_doc_links": docs_library.link_lines(docs)}
 
         if name == "validate_index_codes":
             master = obk_validator.get_master()
@@ -578,11 +590,34 @@ def handle_summary(event, chat_id, user_id, base_url, mention_user_id=None):
     send_reply(event["replyToken"], chat_id, text)
 
 
-def is_summary_request(text, mentioned):
+DOC_LIST_COMMANDS = ("/docs", "/เอกสาร")
+
+
+def handle_document_request(event, chat_id, user_id, text, mentioned, mention_user_id=None):
+    """/docs, or a request that names a team document (from documents.xlsx). Returns True if handled."""
+    reply = lambda t: send_reply(event["replyToken"], chat_id, t, mention_user_id=mention_user_id)
     lowered = text.lower()
-    if lowered.startswith(SUMMARY_COMMANDS):
+
+    if lowered.startswith(DOC_LIST_COMMANDS):
+        docs = docs_library.load()
+        if not docs:
+            reply(tr(user_id, "ยังไม่มีเอกสารในรายการค่ะ ผู้ดูแลเพิ่มได้ในไฟล์ documents.xlsx", "No documents yet. Admins can add them in documents.xlsx."))
+        else:
+            reply(tr(user_id, "เอกสารของทีม\n", "Team documents\n") + "\n".join(docs_library.link_lines(docs)))
         return True
-    return mentioned and any(w in lowered for w in SUMMARY_WORDS)
+
+    if mentioned:
+        docs = docs_library.mentioned_in(text)
+        if docs:
+            reply(tr(user_id, "ลิงก์เอกสารที่ขอค่ะ\n", "Here is the document you asked for\n") + "\n".join(docs_library.link_lines(docs)))
+            store_chat_history_to_csv(chat_id, user_id, text, "[docs] " + ", ".join(d["name"] for d in docs))
+            return True
+    return False
+
+
+def is_summary_request(text, mentioned=False):
+    """Only the /summary command is routed directly; natural requests go to Gemini, which has the tools."""
+    return text.lower().startswith(SUMMARY_COMMANDS)
 
 
 def is_bot_mentioned(message):
@@ -618,6 +653,8 @@ def handle_group_event(event, chat_id, user_id, base_url):
         send_reply(reply_token, chat_id, tr(user_id, "หนูล้างประวัติการสนทนาของกลุ่มนี้แล้วค่ะ", "This group's conversation history has been cleared."), mention_user_id=user_id)
         return
 
+    if handle_document_request(event, chat_id, user_id, text, is_bot_mentioned(message), mention_user_id=user_id):
+        return
     if is_summary_request(text, is_bot_mentioned(message)):
         return handle_summary(event, chat_id, user_id, base_url, mention_user_id=user_id)
 
@@ -739,6 +776,8 @@ def handle_event(event, base_url=""):
             "or tell me what you'd like me to do with it."))
         return
     if message.get("type") == "text":
+        if handle_document_request(event, chat_id, user_id, message["text"].strip(), True):
+            return
         if is_summary_request(message["text"].strip(), True):
             return handle_summary(event, chat_id, user_id, base_url)
         return handle_text(event, chat_id, user_id, message["text"].strip())
@@ -834,9 +873,11 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
             ctx = {"chat_id": chat_id, "user_id": user_id, "base_url": event.get("_base_url", ""),
                    "quoted": event.get("message", {}).get("quotedMessageId")}
             reply, links = generate_response(chat_id, user_parts, history_text, user_id, ctx)
-            if links:
+            if links["docs"]:
+                reply += tr(user_id, "\n\nลิงก์เอกสาร\n", "\n\nDocument links\n") + "\n".join(dict.fromkeys(links["docs"]))
+            if links["files"]:
                 reply += tr(user_id, f"\n\nดาวน์โหลดไฟล์ ลิงก์มีอายุ {obk_files.DOWNLOAD_TTL_SECONDS // 3600} ชั่วโมง\n",
-                            f"\n\nDownload, links expire in {obk_files.DOWNLOAD_TTL_SECONDS // 3600} hours\n") + "\n".join(links)
+                            f"\n\nDownload, links expire in {obk_files.DOWNLOAD_TTL_SECONDS // 3600} hours\n") + "\n".join(links["files"])
         except genai_errors.APIError as e:
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:

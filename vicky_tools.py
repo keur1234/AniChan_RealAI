@@ -113,6 +113,11 @@ SHEETS_SCHEMA = {
 }
 
 FUNCTION_DECLARATIONS = [
+    _decl("find_document_links",
+          "Find the team's existing documents (e.g. Raw file summary, Final Validation summary) by name and send their links. "
+          "Call this first whenever the user asks for a document, table or file.",
+          {"query": {"type": "string", "description": "What the user asked for, e.g. 'Final Validation summary'"}},
+          ["query"]),
     _decl("create_excel_file",
           "Create an Excel .xlsx file the user asked for (a table, list, plan, comparison...) and send them a download link. "
           "Use only data the user gave or data from other tools; never invent figures.",
