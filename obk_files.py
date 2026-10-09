@@ -89,7 +89,7 @@ SKIP_REASONS_EN = {
 
 
 def format_summary(result, file_name, lang='th'):
-    """File summary in the agreed OBK format: total, Red Flag, Validation result."""
+    """File summary in the agreed OBK format: total, Incorrect, Validation result."""
     t = lambda th, en: obk_validator._t(lang, th, en)
     if result.get('skipped'):
         reason = (result['skipped'].replace('ไม่พบคอลัมน์ Asset ID', 'ไม่พบคอลัมน์ index codes')

@@ -205,8 +205,8 @@ TYPE_ORDER = ['TYPE A', 'TYPE B', 'TYPE B OR C', 'TYPE C', 'N/A']
 
 
 def summary_lines(total, dup_count, dup_lines, running_dup_count, type_counts, type_c_codes=(), lang='th'):
-    """The agreed summary: total index codes, Red Flag (TYPE C and duplicates), Validation result."""
-    lines = [_t(lang, f"index codes ทั้งหมด: {total:,}", f"Total index codes: {total:,}"), "", "Red Flag"]
+    """The agreed summary: total index codes, Incorrect (TYPE C and duplicates), Validation result."""
+    lines = [_t(lang, f"index codes ทั้งหมด: {total:,}", f"Total index codes: {total:,}"), "", "Incorrect"]
     type_c = type_counts.get('TYPE C', 0)
     lines.append(f"- TYPE C: {type_c:,} index codes")
     lines += [f"  {c}" for c in type_c_codes]
