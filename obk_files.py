@@ -213,3 +213,12 @@ def build_summary_workbook(result, file_name, lang='th'):
                 width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
                 ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(width + 2, 10), 60)
     return path
+
+
+def new_job():
+    """A fresh downloadable job folder. Returns (token, out_dir); files in out_dir are served at /files/<token>/<name>."""
+    _cleanup_expired()
+    token = secrets.token_urlsafe(16)
+    out_dir = os.path.join(WORK_ROOT, token, "out")
+    os.makedirs(out_dir, exist_ok=True)
+    return token, out_dir

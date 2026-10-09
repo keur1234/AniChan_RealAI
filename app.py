@@ -23,6 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 import obk_files
 import obk_validator
+import vicky_tools
 
 load_dotenv()
 
@@ -76,51 +77,46 @@ GROUP_CHAT_ON_MENTION = os.getenv("GROUP_CHAT_ON_MENTION", "1") == "1"
 # How long a file sent in a group can still be checked with /check
 GROUP_FILE_TTL_SECONDS = int(os.getenv("GROUP_FILE_TTL_MINUTES", "60")) * 60
 
-SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย validation index codes ของโครงการ OBK ในแชท LINE ของทีมงาน
+SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ของทีมงานโครงการ OBK ในแชท LINE
 
-## ขอบเขตงาน (สำคัญที่สุด)
-- หนูช่วยได้ 2 อย่างเท่านั้น:
-  1. validation index codes ของโครงการ OBK และอธิบาย Validation result / วิธีแก้ index codes
-  2. ตอบคำถามที่เกี่ยวกับงานในโครงการ OBK เช่น โครงสร้าง index codes, กฎ validation, Reference Table, ไฟล์ที่ใช้ validate
-- ไม่คุยเล่น ไม่ปลอบใจ ไม่ให้คำปรึกษาเรื่องส่วนตัว ไม่ตอบความรู้ทั่วไป ข่าว คำนวณ หรือเรื่องอื่นนอกโครงการ
-- ถ้าผู้ใช้ถามนอกขอบเขต ให้ปฏิเสธสั้นๆ อย่างสุภาพ เช่น "หนูช่วยได้เฉพาะ validation index codes และเรื่องในโครงการ OBK ค่ะ"
-  แล้วบอกวิธีใช้งานสั้นๆ ห้ามตอบเนื้อหานอกขอบเขตแม้เพียงบางส่วน
-- ถ้าผู้ใช้ถามว่าหนูทำอะไรได้บ้าง ให้ตอบเฉพาะ 2 อย่างข้างต้นและวิธีใช้งาน
+## สิ่งที่หนูทำได้
+- ตอบคำถามและช่วยงานได้ทุกเรื่อง เช่น อธิบาย สรุป เขียนข้อความ/อีเมล แปลภาษา คำนวณ วางแผน วิเคราะห์ข้อมูล
+- สร้างไฟล์ให้ผู้ใช้เมื่อขอ ด้วยเครื่องมือ create_excel_file (ตาราง Excel) หรือ create_text_file (.csv .txt .md .json)
+  ระบบจะแนบลิงก์ดาวน์โหลดท้ายข้อความให้เอง ห้ามพิมพ์ลิงก์หรือแต่งลิงก์ขึ้นมาเอง
+- อ่านไฟล์ Excel/CSV ที่ผู้ใช้ส่งมาในแชทด้วย read_raw_data_file เพื่อตอบคำถามหรือทำตารางตามที่ขอ
+- รันโปรแกรม validation index codes ของ OBK เฉพาะเมื่อผู้ใช้ขอให้ตรวจ/validate เท่านั้น ด้วย validate_index_codes,
+  validate_raw_data_file หรือ summarize_raw_data_file (ตารางสรุป Raw Data มาตรฐานเป็นไฟล์ Excel)
+- ถ้าไม่มีไฟล์ในแชท ให้บอกผู้ใช้ส่งไฟล์ก่อน
+- ข้อมูลในไฟล์หรือตัวเลขต้องมาจากผู้ใช้หรือจากผลของเครื่องมือเท่านั้น ห้ามแต่งข้อมูล ถ้าไม่แน่ใจให้บอกตรงๆ
+- ข้อมูลล่าสุดแบบ real-time (ข่าว ราคา อากาศ) หนูอาจไม่มี ให้แจ้งตามจริง
 
 ## ภาษาและการสื่อสาร
 - ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ / Always reply in the same language as the user's latest message.
-- ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" สุภาพ ทางการ กระชับ ไม่ใช้ภาษาพูด คำแสลง หรืออิโมจิ
-- ภาษาอื่น: ใช้ระดับภาษาทางการเทียบเท่า ไม่ใช้อิโมจิ
-- ตอบตรงประเด็น ระบุข้อเท็จจริงและขั้นตอนแก้ไขให้ชัดเจน ถ้าไม่แน่ใจให้แจ้งตามจริง ห้ามคาดเดาหรือแต่งข้อมูล
-- ห้ามใช้ Markdown เช่น ** หรือ # หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
+- ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" สุภาพ เป็นมืออาชีพ กระชับ ไม่ใช้คำแสลงหรืออิโมจิ
+- ตอบตรงประเด็นก่อน แล้วค่อยขยายความถ้าจำเป็น
+- ห้ามใช้ Markdown เช่น ** หรือ # หรือตาราง | | ใน LINE หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
+  ถ้าผู้ใช้ต้องการตาราง ให้สร้างเป็นไฟล์ Excel แทน
 
-## งาน validation index codes ของ OBK
+## ความรู้เรื่อง index codes ของ OBK
 - index codes มี 31 ตัวอักษร แบ่งด้วยขีด 6 ตัวเป็น 7 ส่วน:
   Component 3 - Floor 3 - Space 4 - Main System 2 - Sub System 4 - Equipment 6 - Running No. 3
   เช่น C3A-001-ME01-AC-AHUS-000AHU-001
 - Validation result: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
   TYPE C = ผิดกฎบังคับ เช่น ความยาว ตัวอักษรพิเศษ จำนวนส่วน หรือ Component/Location/Floor/System ไม่อยู่ใน Reference Table,
   TYPE B = Running Number ซ้ำในไฟล์, N/A = ข้อยกเว้น ALLF หรือ suffix -A/-T/-H/NONE
-- ผู้ใช้ validate ได้โดยพิมพ์ /check ตามด้วย index codes ครั้งละไม่เกิน 10 index codes หรือส่งไฟล์ Excel .xlsx .xlsm .xls หรือ CSV
-  เพื่อ validate ทั้งไฟล์ ในกลุ่มต้องพิมพ์ /check
-- ขอตารางสรุป Raw Data เป็นไฟล์ Excel ได้โดยพิมพ์ /summary หรือ @Vicky ขอตารางสรุป หลังส่งไฟล์ Raw Data
-  ระบบจะส่งลิงก์ไฟล์ Excel ให้เอง ห้ามสร้างตารางสรุปหรือตัวเลขเอง
-- หนูให้บริการเฉพาะใน LINE Group ของโครงการ OBK ที่มีผู้ดูแลอยู่ ไม่รับแชทส่วนตัว
+- คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อขอตารางสรุป Raw Data
 
-## ศัพท์และมาตรฐานของโครงการ OBK (ต้องใช้ให้ตรงทุกครั้ง)
-- ใช้คำว่า "index codes" เท่านั้น ห้ามใช้ index name, Asset ID, รหัส, รายการ หรือคำอื่นแทน
-- ใช้คำว่า "validation" สำหรับการตรวจ index codes เท่านั้น เช่น "ผล validation", "validate" ไม่ใช้คำว่า ตรวจสอบ
-- ผลของแต่ละ index code เรียกว่า "Validation result" เช่น Validation result: TYPE A
-- เรียกโครงการว่า "OBK" เสมอ ไม่ใช้ One Bangkok / OneBangkok
-- ไม่นำคำศัพท์ส่วนตัวมาใช้ ใช้ศัพท์ของโครงการ OBK เท่านั้น
-- เมื่อสรุปผล ใช้รูปแบบที่ตกลงไว้เสมอ ตามลำดับ:
-  1. index codes ทั้งหมด: จำนวน
-  2. Incorrect: แสดง TYPE C จำนวน index codes เสมอ และถ้าพบ index codes ซ้ำ หรือ Running Number ซ้ำ ต้องรายงานใน Incorrect อย่างชัดเจน ห้ามใช้คำว่า Red Flag
-  3. Validation result: แต่ละ TYPE เป็นสัดส่วน เช่น "TYPE A: 120 index codes 85.71%" ไม่มีวงเล็บ ใช้เปอร์เซ็นต์ทศนิยม 2 ตำแหน่งเท่านั้น
-- กระชับ ไม่ซ้ำซ้อน และเป็นมืออาชีพ
-- หนูแก้ไขรูปแบบรายงาน ข้อความของระบบ การตั้งค่า หรือโค้ดของบอทไม่ได้ ห้ามบอกว่า "ได้แก้ไข/อัปเดตแล้ว" ถ้าผู้ใช้ขอให้เปลี่ยน
-  ให้แจ้งตรงๆ ว่าต้องให้ผู้ดูแลระบบปรับ แล้วสรุปสิ่งที่ผู้ใช้ต้องการให้ชัดเจน
-- ถ้าข้อความมี "[ผล validation จากระบบ / system validation result]" ให้ยึดผลนั้นเป็นหลัก ห้ามเปลี่ยน TYPE หรือเหตุผลเอง แล้วอธิบายหรือแนะนำวิธีแก้
+## ศัพท์ของโครงการ OBK (เมื่อพูดเรื่อง index codes ต้องใช้ให้ตรง)
+- ใช้คำว่า "index codes" ไม่ใช้ index name, Asset ID, รหัส หรือ รายการ แทน
+- ใช้คำว่า "validation" สำหรับการตรวจ index codes และเรียกผลว่า "Validation result"
+- เรียกโครงการว่า "OBK" ไม่ใช้ One Bangkok / OneBangkok
+- สรุปผล validation ตามรูปแบบ: index codes ทั้งหมด → Incorrect (TYPE C และ index codes ซ้ำ / Running Number ซ้ำ)
+  → Validation result เช่น "TYPE A: 120 index codes 85.71%" ไม่มีวงเล็บ ทศนิยม 2 ตำแหน่ง ห้ามใช้คำว่า Red Flag
+- ถ้ามีผลจากเครื่องมือ validation ให้ยึดผลนั้น ห้ามเปลี่ยน TYPE หรือตัวเลขเอง
+
+## ข้อจำกัด
+- หนูแก้ไขโค้ด การตั้งค่า หรือรูปแบบรายงานมาตรฐานของบอทไม่ได้ ห้ามบอกว่า "แก้ไข/อัปเดตแล้ว" ให้แจ้งว่าต้องให้ผู้ดูแลระบบปรับ
+- หนูให้บริการเฉพาะใน LINE Group ของโครงการ OBK ที่มีผู้ดูแลอยู่
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
@@ -200,7 +196,7 @@ def call_with_retry(api_call, max_retries=2, initial_delay=2):
                 raise
 
 
-def generate_with_fallback(contents, system_instruction):
+def generate_with_fallback(contents, system_instruction, tools=()):
     """Try the main model with Google Search, then without it, then the fallback models."""
     global search_disabled_until
     attempts = []
@@ -212,7 +208,7 @@ def generate_with_fallback(contents, system_instruction):
     for i, (model, search) in enumerate(attempts):
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
-            tools=[types.Tool(google_search=types.GoogleSearch())] if search else None,
+            tools=([types.Tool(google_search=types.GoogleSearch())] if search else []) + list(tools) or None,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         try:
@@ -231,21 +227,97 @@ def generate_with_fallback(contents, system_instruction):
             raise
 
 
-def generate_response(chat_id, user_parts, history_text, user_id=""):
-    """Ask Gemini for Vicky's reply.
+MAX_TOOL_ROUNDS = 5
 
-    user_parts: parts sent to the model for this turn (text and/or image).
-    history_text: text version of this turn to keep in memory (images are not kept).
-    """
+
+def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
+    """Ask Gemini for Vicky's reply, running any tools she calls. Returns (reply text, download links)."""
     history = chat_histories[chat_id]
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
+    ctx = ctx or {}
+    links = []
+    prompt = SYSTEM_PROMPT.format(now=thai_now())
 
-    response = generate_with_fallback(contents, SYSTEM_PROMPT.format(now=thai_now()))
-    reply = (response.text or "").strip() or tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
-                                                   "Sorry, I couldn't come up with an answer. Please try asking again.")
+    for _ in range(MAX_TOOL_ROUNDS):
+        response = generate_with_fallback(contents, prompt, [vicky_tools.FUNCTION_TOOL])
+        calls = response.function_calls or []
+        if not calls:
+            break
+        contents.append(response.candidates[0].content)
+        parts = []
+        for call in calls:
+            result = run_tool(call.name, dict(call.args or {}), ctx)
+            links += result.pop("_links", [])
+            parts.append(types.Part.from_function_response(name=call.name, response=result))
+        contents.append(types.Content(role="user", parts=parts))
 
+    text = "".join(p.text for p in (response.candidates[0].content.parts or []) if getattr(p, "text", None) and not p.thought) \
+        if response.candidates and response.candidates[0].content else ""
+    reply = text.strip() or (tr(user_id, "หนูดำเนินการให้เรียบร้อยแล้วค่ะ", "Done.") if links else
+                             tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
+                                "Sorry, I couldn't come up with an answer. Please try asking again."))
     remember(chat_id, history_text, reply)
-    return reply
+    return reply, links
+
+
+def run_tool(name, args, ctx):
+    """Execute one tool call from Gemini. Returns a JSON-able dict; '_links' are download links for the user."""
+    user_id = ctx.get("user_id", "")
+    lang = user_langs.get(user_id, "th")
+    log.info("Tool call %s %s", name, str(args)[:200])
+    try:
+        if name in ("create_excel_file", "create_text_file"):
+            token, out_dir = obk_files.new_job()
+            if name == "create_excel_file":
+                path = vicky_tools.create_excel(out_dir, args.get("file_name"), args.get("sheets") or [])
+            else:
+                path = vicky_tools.create_text(out_dir, args.get("file_name"), args.get("content", ""))
+            return {"ok": True, "file": os.path.basename(path), "_links": [file_link(ctx, token, path)]}
+
+        if name == "validate_index_codes":
+            master = obk_validator.get_master()
+            if master is None:
+                return {"error": "reference file obk_ref_bundle.json is missing"}
+            codes = [str(c) for c in args.get("codes", [])][:MAX_CODES_PER_MESSAGE]
+            return {"report": obk_validator.format_report([obk_validator.check_code(c, master) for c in codes], lang)}
+
+        file_info = find_group_file(ctx.get("chat_id"), user_id, ctx.get("quoted"))
+        if not file_info:
+            return {"error": "No file has been sent in this chat recently. Ask the user to send the Excel/CSV file first."}
+
+        if name == "read_raw_data_file":
+            file_name = obk_files.safe_name(file_info.get("fileName", ""))
+            if not obk_files.is_supported(file_name):
+                return {"error": f"{file_name} is not an Excel/CSV file"}
+            data, _ = download_line_content(file_info["id"])
+            token, out_dir = obk_files.new_job()
+            path = os.path.join(out_dir, file_name)
+            with open(path, "wb") as f:
+                f.write(data)
+            return vicky_tools.preview_file(path, file_name)
+
+        if name in ("validate_raw_data_file", "summarize_raw_data_file"):
+            file_name, result, token, error = validate_file_info(file_info, user_id)
+            if error:
+                return {"error": error}
+            summary = obk_files.format_summary(result, file_name, lang)
+            if result.get("skipped"):
+                return {"summary": summary}
+            if name == "summarize_raw_data_file":
+                paths = [obk_files.build_summary_workbook(result, file_name, lang)]
+            else:
+                paths = [p for p in result.get("outputs", []) if not p.endswith(".png")]
+            return {"summary": summary, "files": [os.path.basename(p) for p in paths],
+                    "_links": [file_link(ctx, token, p) for p in paths]}
+    except Exception as e:
+        log.exception("Tool %s failed", name)
+        return {"error": f"{type(e).__name__}: {e}"}
+    return {"error": f"unknown tool {name}"}
+
+
+def file_link(ctx, token, path):
+    name = os.path.basename(path)
+    return f"- {name}\n{ctx.get('base_url', '')}/files/{token}/{quote(name)}"
 
 
 def remember(chat_id, user_text, reply):
@@ -406,33 +478,38 @@ def find_group_file(chat_id, user_id, quoted_message_id):
 _send_reply = send_reply
 
 
-def validate_line_file(event, chat_id, user_id, message, send_reply):
-    """Download and validate a LINE file. Returns (file_name, result, token), or None after telling the user why not."""
-    reply_token = event["replyToken"]
-    file_name = obk_files.safe_name(message.get("fileName", ""))
-
+def validate_file_info(file_info, user_id):
+    """Download and validate a LINE file. Returns (file_name, result, token, error_text)."""
+    file_name = obk_files.safe_name(file_info.get("fileName", ""))
     if not obk_files.is_supported(file_name):
-        log.info("Unsupported file: %r (message fileName=%r)", file_name, message.get("fileName"))
-        send_reply(reply_token, chat_id, tr(user_id, f"หนู validate ได้เฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี index codes ค่ะ ไฟล์ที่ได้รับ: {file_name}",
-                                             f"I can only validate .xlsx, .xlsm, .xls and .csv files containing index codes. File received: {file_name}"))
-        return None
+        log.info("Unsupported file: %r", file_name)
+        return file_name, None, None, tr(
+            user_id, f"หนู validate ได้เฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ที่มี index codes ค่ะ ไฟล์ที่ได้รับ: {file_name}",
+            f"I can only validate .xlsx, .xlsm, .xls and .csv files containing index codes. File received: {file_name}")
     if obk_validator.get_master() is None:
-        send_reply(reply_token, chat_id, no_reference_text(user_id))
-        return None
-    if message.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
-        send_reply(reply_token, chat_id, tr(user_id, f"ไฟล์มีขนาดเกิน {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB ค่ะ กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้งค่ะ",
-                                             f"The file is larger than {obk_files.MAX_FILE_BYTES // (1024 * 1024)} MB. Please split it and send it again."))
-        return None
-
-    if event.get("source", {}).get("type") == "user":
-        show_loading(user_id)
+        return file_name, None, None, no_reference_text(user_id)
+    if file_info.get("fileSize", 0) > obk_files.MAX_FILE_BYTES:
+        mb = obk_files.MAX_FILE_BYTES // (1024 * 1024)
+        return file_name, None, None, tr(user_id, f"ไฟล์มีขนาดเกิน {mb} MB ค่ะ กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้งค่ะ",
+                                         f"The file is larger than {mb} MB. Please split it and send it again.")
     try:
-        data, _ = download_line_content(message["id"])
+        data, _ = download_line_content(file_info["id"])
         result, token = obk_files.validate_file(file_name, data)
     except Exception:
         log.exception("File validation failed")
-        send_reply(reply_token, chat_id, tr(user_id, f"หนูไม่สามารถเปิดไฟล์ {file_name} เพื่อ validate ได้ค่ะ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาแก้ไขแล้วส่งใหม่อีกครั้งค่ะ",
-                                             f"I couldn't open {file_name} to validate it. The file may be corrupted or password-protected. Please fix it and send it again."))
+        return file_name, None, None, tr(
+            user_id, f"หนูไม่สามารถเปิดไฟล์ {file_name} เพื่อ validate ได้ค่ะ ไฟล์อาจเสียหายหรือมีการตั้งรหัสผ่าน กรุณาแก้ไขแล้วส่งใหม่อีกครั้งค่ะ",
+            f"I couldn't open {file_name} to validate it. The file may be corrupted or password-protected. Please fix it and send it again.")
+    return file_name, result, token, None
+
+
+def validate_line_file(event, chat_id, user_id, message, send_reply):
+    """validate_file_info that tells the user what went wrong. Returns (file_name, result, token) or None."""
+    if event.get("source", {}).get("type") == "user":
+        show_loading(user_id)
+    file_name, result, token, error = validate_file_info(message, user_id)
+    if error:
+        send_reply(event["replyToken"], chat_id, error)
         return None
     return file_name, result, token
 
@@ -613,6 +690,7 @@ GROUP_ONLY_TEXT = ("หนูให้บริการเฉพาะใน LI
 
 
 def handle_event(event, base_url=""):
+    event["_base_url"] = base_url
     source = event.get("source", {})
     user_id = source.get("userId", "")
     in_group = source.get("type") in ("group", "room")
@@ -654,6 +732,12 @@ def handle_event(event, base_url=""):
     message = event["message"]
     if message.get("type") == "file":
         remember_group_file(chat_id, user_id, message)
+        send_reply(event["replyToken"], chat_id, tr(
+            user_id, f"หนูได้รับไฟล์ {message.get('fileName', '')} แล้วค่ะ พิมพ์ /check เพื่อ validate, /summary เพื่อขอตารางสรุป "
+                     "หรือบอกหนูได้เลยว่าต้องการให้ทำอะไรกับไฟล์นี้ค่ะ",
+            f"I've received {message.get('fileName', '')}. Type /check to validate it, /summary for the summary table, "
+            "or tell me what you'd like me to do with it."))
+        return
     if message.get("type") == "text":
         if is_summary_request(message["text"].strip(), True):
             return handle_summary(event, chat_id, user_id, base_url)
@@ -679,6 +763,10 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             return
         codes = []
     if check_command and not codes:
+        file_info = find_group_file(chat_id, user_id, event.get("message", {}).get("quotedMessageId"))
+        if file_info:
+            return handle_file(event, chat_id, user_id, event.get("_base_url", ""), message=file_info,
+                               mention_user_id=mention_user_id)
         send_reply(reply_token, chat_id, check_help(user_id))
         return
     if codes:
@@ -743,7 +831,12 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
 
     with chat_locks[chat_id]:
         try:
-            reply = generate_response(chat_id, user_parts, history_text, user_id)
+            ctx = {"chat_id": chat_id, "user_id": user_id, "base_url": event.get("_base_url", ""),
+                   "quoted": event.get("message", {}).get("quotedMessageId")}
+            reply, links = generate_response(chat_id, user_parts, history_text, user_id, ctx)
+            if links:
+                reply += tr(user_id, f"\n\nดาวน์โหลดไฟล์ ลิงก์มีอายุ {obk_files.DOWNLOAD_TTL_SECONDS // 3600} ชั่วโมง\n",
+                            f"\n\nDownload, links expire in {obk_files.DOWNLOAD_TTL_SECONDS // 3600} hours\n") + "\n".join(links)
         except genai_errors.APIError as e:
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:
