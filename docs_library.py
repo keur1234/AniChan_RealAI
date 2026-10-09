@@ -66,20 +66,71 @@ def mentioned_in(text):
     return [d for _, d in sorted(hits, key=lambda h: -h[0])]
 
 
+# Words that say nothing about which document is meant
+GENERIC_WORDS = ("ตาราง", "ไฟล์", "เอกสาร", "ขอ", "หน่อย", "ด้วย", "ที", "ครับ", "ค่ะ", "คะ", "ลิงก์", "ลิ้งค์", "ลิ้ง",
+                 "table", "file", "document", "doc", "sheet", "link", "please", "the")
+
+
+def _strip_generic(text):
+    text = _norm(text)
+    for w in GENERIC_WORDS:
+        text = text.replace(w, " ")
+    return re.sub(r"[\s/|,.]+", " ", text).strip()
+
+
 def search(query):
-    """Documents matching a free-text query (keyword match first, then fuzzy)."""
+    """(matches, similar): matches are documents the query clearly names; similar are only close guesses."""
     found = mentioned_in(query)
     if found:
-        return found
-    q = _norm(query)
-    scored = []
+        return found, []
+    q = _strip_generic(query)
+    if not q:
+        return [], []
+    strong, similar = [], []
     for doc in load():
-        score = max((difflib.SequenceMatcher(None, q, k).ratio() for k in _keys(doc)), default=0)
-        if any(q and (k in q or q in k) for k in _keys(doc)):
-            score = 1
-        if score >= 0.6:
-            scored.append((score, doc))
-    return [d for _, d in sorted(scored, key=lambda s: -s[0])]
+        keys = [_strip_generic(k) for k in [doc["name"], *doc.get("aliases", [])]]
+        keys = [k for k in keys if k]
+        score = max((difflib.SequenceMatcher(None, q, k).ratio() for k in keys), default=0)
+        if len(q) >= 6 and any(q in k or k in q for k in keys if len(k) >= 6):
+            score = max(score, 0.9)
+        if score >= 0.85:
+            strong.append((score, doc))
+        elif score >= 0.6:
+            similar.append((score, doc))
+    by_score = lambda items: [d for _, d in sorted(items, key=lambda s: -s[0])]
+    return by_score(strong), by_score(similar)
+
+
+class DocumentAccessError(Exception):
+    pass
+
+
+def download(doc, timeout=60):
+    """Download a team document (Google Drive / Sheets link) as an Excel file. Returns (file_name, bytes).
+
+    Works when the file is shared as "Anyone with the link can view".
+    """
+    import requests
+    url = doc["url"]
+    m = re.search(r"/d/([A-Za-z0-9_-]{20,})", url) or re.search(r"[?&]id=([A-Za-z0-9_-]{20,})", url)
+    if not m:
+        raise DocumentAccessError("unsupported link; only Google Drive / Google Sheets links can be opened")
+    file_id = m.group(1)
+    candidates = [f"https://drive.google.com/uc?export=download&id={file_id}"]
+    if "/spreadsheets/" in url:
+        candidates.insert(0 if "rtpof=true" not in url else 1,
+                          f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx")
+    for candidate in candidates:
+        try:
+            r = requests.get(candidate, timeout=timeout, allow_redirects=True)
+        except requests.exceptions.RequestException as e:
+            log.warning("Download of %s failed: %s", doc["name"], e)
+            continue
+        if r.status_code == 200 and r.content[:2] == b"PK":            # .xlsx files are zip archives
+            name = re.sub(r'[\\/:*?"<>|]', "_", doc["name"]) + ".xlsx"
+            return name, r.content
+    raise DocumentAccessError("the file could not be downloaded; it must be shared as "
+                              "'Anyone with the link can view' on Google Drive")
 
 
 def link_lines(docs):

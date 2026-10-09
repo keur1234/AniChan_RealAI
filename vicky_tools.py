@@ -7,7 +7,8 @@ from google.genai import types
 import obk_files
 
 TEXT_EXTENSIONS = ('.csv', '.txt', '.md', '.json')
-MAX_PREVIEW_ROWS = 30
+MAX_PREVIEW_ROWS = 50
+MAX_CELL_CHARS = 120
 NUMBER_RE = re.compile(r'^-?(0|[1-9]\d*)(\.\d+)?$')     # keeps codes like "001" as text
 
 
@@ -85,7 +86,8 @@ def preview_file(path, file_name):
             "sheet": str(name),
             "rows": int(len(df)),
             "columns": [str(c) for c in df.columns],
-            "first_rows": df.head(MAX_PREVIEW_ROWS).fillna("").astype(str).values.tolist(),
+            "first_rows": df.head(MAX_PREVIEW_ROWS).fillna("").astype(str)
+                            .map(lambda v: v[:MAX_CELL_CHARS]).values.tolist(),
         })
     return {"file": file_name, "sheets": sheets,
             "note": f"Only the first {MAX_PREVIEW_ROWS} rows of each sheet are shown; 'rows' is the full count."}
@@ -128,6 +130,10 @@ FUNCTION_DECLARATIONS = [
           {"file_name": {"type": "string", "description": "File name with extension, e.g. notes.txt"},
            "content": {"type": "string", "description": "Full file content"}},
           ["file_name", "content"]),
+    _decl("read_document",
+          "Open a team document (from find_document_links) and read its sheets, columns, row counts and first rows, "
+          "to summarise it or answer questions about it.",
+          {"name": {"type": "string", "description": "Document name or keyword"}}, ["name"]),
     _decl("read_raw_data_file",
           "Read the latest Excel/CSV file sent in this chat (or the one the user replied to): sheets, columns, row counts "
           "and the first rows. Use it to answer questions about the file or to build a custom table from it."),
@@ -137,10 +143,14 @@ FUNCTION_DECLARATIONS = [
           ["codes"]),
     _decl("validate_raw_data_file",
           "Run the OBK validation program on the latest file sent in this chat. Only when the user asks to validate/check it. "
-          "Returns the validation summary and download links to the result files."),
+          "Returns the validation summary and download links to the result files. "
+          "Set document_name to validate a team document instead.",
+          {"document_name": {"type": "string", "description": "Team document to use instead of the file sent in the chat (optional)"}}),
     _decl("summarize_raw_data_file",
           "Validate the latest raw data file in this chat and create the standard OBK Excel summary table "
-          "(by sheet, category, component, Incorrect TYPE C, duplicates). Use when the user asks for a summary table of the raw data file."),
+          "(by sheet, category, component, Incorrect TYPE C, duplicates). Use when the user asks for a summary table of the raw data file. "
+          "Set document_name to use a team document instead.",
+          {"document_name": {"type": "string", "description": "Team document to use instead of the file sent in the chat (optional)"}}),
 ]
 
 FUNCTION_TOOL = types.Tool(function_declarations=FUNCTION_DECLARATIONS)

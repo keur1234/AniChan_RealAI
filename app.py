@@ -83,7 +83,12 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ขอ
 - สร้างไฟล์ให้ผู้ใช้เมื่อขอ ด้วยเครื่องมือ create_excel_file (ตาราง Excel) หรือ create_text_file (.csv .txt .md .json)
   ระบบจะแนบลิงก์ดาวน์โหลดท้ายข้อความให้เอง ห้ามพิมพ์ลิงก์หรือแต่งลิงก์ขึ้นมาเอง
 - เอกสารที่ทีมมีอยู่แล้ว (เช่น Raw file summary, Final Validation summary) ให้ใช้ find_document_links ค้นและส่งลิงก์
-  ทุกครั้งที่ผู้ใช้ขอเอกสาร ตาราง หรือไฟล์ ให้ค้นด้วย find_document_links ก่อน ถ้าไม่พบจึงสร้างไฟล์ใหม่หรือถามผู้ใช้
+  ทุกครั้งที่ผู้ใช้ขอเอกสาร ตาราง หรือไฟล์ ให้ค้นด้วย find_document_links ก่อน
+  ถ้าไม่พบ ให้ตอบสั้นๆ ว่าไม่พบเอกสารชื่อนี้ในรายการของทีม ผู้ดูแลเพิ่มได้ในไฟล์ documents.xlsx
+  ถ้ามี similar_names ให้ถามว่าหมายถึงเอกสารไหน ห้ามส่งหรือเสนอเอกสารที่ไม่เกี่ยวข้อง
+- เปิดอ่านเนื้อหาเอกสารของทีมได้ด้วย read_document และ validate/สรุปเอกสารของทีมได้โดยใส่ document_name
+  ถ้าเปิดไม่ได้ ให้บอกว่าต้องแชร์ไฟล์ใน Google Drive แบบ "ทุกคนที่มีลิงก์ดูได้"
+- ถ้าผู้ใช้พูดถึง "ไฟล์นี้" "ไฟล์นั้น" ให้ดูจากบทสนทนาก่อนหน้า เช่น เอกสารที่หนูเพิ่งส่งลิงก์ไป หรือไฟล์ที่เพิ่งส่งในแชท
 - อ่านไฟล์ Excel/CSV ที่ผู้ใช้ส่งมาในแชทด้วย read_raw_data_file เพื่อตอบคำถามหรือทำตารางตามที่ขอ
 - รันโปรแกรม validation index codes ของ OBK เฉพาะเมื่อผู้ใช้ขอให้ตรวจ/validate เท่านั้น ด้วย validate_index_codes,
   validate_raw_data_file หรือ summarize_raw_data_file (ตารางสรุป Raw Data มาตรฐานเป็นไฟล์ Excel)
@@ -94,7 +99,7 @@ SYSTEM_PROMPT = """คุณชื่อ "Vicky" ผู้ช่วย AI ขอ
 ## ภาษาและการสื่อสาร
 - ตอบเป็นภาษาเดียวกับข้อความล่าสุดของผู้ใช้เสมอ / Always reply in the same language as the user's latest message.
 - ภาษาไทย: แทนตัวเองว่า "หนู" เรียกผู้ใช้ว่า "คุณ" ลงท้ายด้วย "ค่ะ" สุภาพ เป็นมืออาชีพ กระชับ ไม่ใช้คำแสลงหรืออิโมจิ
-- ตอบตรงประเด็นก่อน แล้วค่อยขยายความถ้าจำเป็น
+- ตอบสั้น กระชับ ตรงประเด็น ไม่เกินประมาณ 5 บรรทัด เว้นแต่ผู้ใช้ขอรายละเอียด ไม่ต้องเสนอทางเลือกยาวๆ
 - ห้ามใช้ Markdown เช่น ** หรือ # หรือตาราง | | ใน LINE หากต้องแจกแจงเป็นข้อให้ใช้ 1. 2. 3. หรือ "- "
   ถ้าผู้ใช้ต้องการตาราง ให้สร้างเป็นไฟล์ Excel แทน
 
@@ -262,7 +267,6 @@ def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
     reply = text.strip() or (tr(user_id, "หนูดำเนินการให้เรียบร้อยแล้วค่ะ", "Done.") if links["files"] or links["docs"] else
                              tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
                                 "Sorry, I couldn't come up with an answer. Please try asking again."))
-    remember(chat_id, history_text, reply)
     return reply, links
 
 
@@ -281,10 +285,21 @@ def run_tool(name, args, ctx):
             return {"ok": True, "file": os.path.basename(path), "_links": [file_link(ctx, token, path)]}
 
         if name == "find_document_links":
-            docs = docs_library.search(args.get("query", ""))
+            docs, similar = docs_library.search(args.get("query", ""))
             if not docs:
-                return {"found": [], "available": [d["name"] for d in docs_library.load()]}
+                return {"found": [], "similar_names": [d["name"] for d in similar],
+                        "note": "Nothing matches. Say so briefly; do not send unrelated documents."}
             return {"found": [d["name"] for d in docs], "_doc_links": docs_library.link_lines(docs)}
+
+        if name == "read_document":
+            file_name, data, error = fetch_document(args.get("name", ""))
+            if error:
+                return {"error": error}
+            token, out_dir = obk_files.new_job()
+            path = os.path.join(out_dir, file_name)
+            with open(path, "wb") as f:
+                f.write(data)
+            return vicky_tools.preview_file(path, file_name)
 
         if name == "validate_index_codes":
             master = obk_validator.get_master()
@@ -293,7 +308,13 @@ def run_tool(name, args, ctx):
             codes = [str(c) for c in args.get("codes", [])][:MAX_CODES_PER_MESSAGE]
             return {"report": obk_validator.format_report([obk_validator.check_code(c, master) for c in codes], lang)}
 
-        file_info = find_group_file(ctx.get("chat_id"), user_id, ctx.get("quoted"))
+        if args.get("document_name"):
+            file_name, data, error = fetch_document(args["document_name"])
+            if error:
+                return {"error": error}
+            file_info = {"fileName": file_name, "fileSize": len(data), "_data": data}
+        else:
+            file_info = find_group_file(ctx.get("chat_id"), user_id, ctx.get("quoted"))
         if not file_info:
             return {"error": "No file has been sent in this chat recently. Ask the user to send the Excel/CSV file first."}
 
@@ -301,7 +322,7 @@ def run_tool(name, args, ctx):
             file_name = obk_files.safe_name(file_info.get("fileName", ""))
             if not obk_files.is_supported(file_name):
                 return {"error": f"{file_name} is not an Excel/CSV file"}
-            data, _ = download_line_content(file_info["id"])
+            data = file_info.get("_data") or download_line_content(file_info["id"])[0]
             token, out_dir = obk_files.new_job()
             path = os.path.join(out_dir, file_name)
             with open(path, "wb") as f:
@@ -325,6 +346,19 @@ def run_tool(name, args, ctx):
         log.exception("Tool %s failed", name)
         return {"error": f"{type(e).__name__}: {e}"}
     return {"error": f"unknown tool {name}"}
+
+
+def fetch_document(name):
+    """Download a team document by name. Returns (file_name, data, error)."""
+    docs, similar = docs_library.search(name)
+    if not docs:
+        hint = f" Similar: {', '.join(d['name'] for d in similar)}" if similar else ""
+        return None, None, f"No team document named '{name}'.{hint}"
+    try:
+        file_name, data = docs_library.download(docs[0])
+        return file_name, data, None
+    except docs_library.DocumentAccessError as e:
+        return None, None, f"Cannot open '{docs[0]['name']}': {e}"
 
 
 def file_link(ctx, token, path):
@@ -505,7 +539,7 @@ def validate_file_info(file_info, user_id):
         return file_name, None, None, tr(user_id, f"ไฟล์มีขนาดเกิน {mb} MB ค่ะ กรุณาแบ่งไฟล์แล้วส่งใหม่อีกครั้งค่ะ",
                                          f"The file is larger than {mb} MB. Please split it and send it again.")
     try:
-        data, _ = download_line_content(file_info["id"])
+        data = file_info.get("_data") or download_line_content(file_info["id"])[0]
         result, token = obk_files.validate_file(file_name, data)
     except Exception:
         log.exception("File validation failed")
@@ -586,11 +620,18 @@ def handle_summary(event, chat_id, user_id, base_url, mention_user_id=None):
             send_reply(event["replyToken"], chat_id, system_error_text(user_id))
             return
         text = tr(user_id, "ตารางสรุป Raw Data\n", "Raw data summary table\n") + text + download_links(user_id, base_url, token, [path])
+    with chat_locks[chat_id]:
+        remember(chat_id, f"/summary {file_name}", text)
     store_chat_history_to_csv(chat_id, user_id, f"[summary] {file_name}", text)
     send_reply(event["replyToken"], chat_id, text)
 
 
 DOC_LIST_COMMANDS = ("/docs", "/เอกสาร")
+# A message that names a document and only asks for it gets the link straight away;
+# anything that wants something done with it (read, summarise, validate...) goes to Gemini.
+DOC_REQUEST_WORDS = ("ขอ", "ส่ง", "ลิงก์", "ลิ้ง", "link", "send", "อยู่ไหน", "where")
+DOC_ACTION_WORDS = ("ดู", "อ่าน", "สรุป", "ทำ", "ตรวจ", "เช็ค", "validate", "check", "วิเคราะห์", "เทียบ", "เปิด",
+                    "ข้างใน", "มีอะไร", "read", "summarize", "summarise", "analy", "compare", "open", "inside")
 
 
 def handle_document_request(event, chat_id, user_id, text, mentioned, mention_user_id=None):
@@ -606,10 +647,14 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
             reply(tr(user_id, "เอกสารของทีม\n", "Team documents\n") + "\n".join(docs_library.link_lines(docs)))
         return True
 
-    if mentioned:
+    plain_request = any(w in lowered for w in DOC_REQUEST_WORDS) and not any(w in lowered for w in DOC_ACTION_WORDS)
+    if mentioned and plain_request:
         docs = docs_library.mentioned_in(text)
         if docs:
-            reply(tr(user_id, "ลิงก์เอกสารที่ขอค่ะ\n", "Here is the document you asked for\n") + "\n".join(docs_library.link_lines(docs)))
+            answer = tr(user_id, "ลิงก์เอกสารที่ขอค่ะ\n", "Here is the document you asked for\n") + "\n".join(docs_library.link_lines(docs))
+            with chat_locks[chat_id]:
+                remember(chat_id, text, answer)
+            reply(answer)
             store_chat_history_to_csv(chat_id, user_id, text, "[docs] " + ", ".join(d["name"] for d in docs))
             return True
     return False
@@ -878,6 +923,8 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
             if links["files"]:
                 reply += tr(user_id, f"\n\nดาวน์โหลดไฟล์ ลิงก์มีอายุ {obk_files.DOWNLOAD_TTL_SECONDS // 3600} ชั่วโมง\n",
                             f"\n\nDownload, links expire in {obk_files.DOWNLOAD_TTL_SECONDS // 3600} hours\n") + "\n".join(links["files"])
+            # Remember the reply exactly as sent (with links) so "this file" in the next message makes sense
+            remember(chat_id, history_text, reply)
         except genai_errors.APIError as e:
             log.error("Gemini call failed: %s %s", e.code, e.message)
             if e.code == 429:
