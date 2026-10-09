@@ -137,6 +137,14 @@ FUNCTION_DECLARATIONS = [
     _decl("read_raw_data_file",
           "Read the latest Excel/CSV file sent in this chat (or the one the user replied to): sheets, columns, row counts "
           "and the first rows. Use it to answer questions about the file or to build a custom table from it."),
+    _decl("find_in_bim",
+          "Look up index codes in the BIM system (all components' BIM exports, indexed locally). "
+          "Use when the user asks whether index codes exist in BIM.",
+          {"codes": {"type": "array", "items": {"type": "string"}, "description": "Index codes, max 10"}}, ["codes"]),
+    _decl("compare_file_with_bim",
+          "Check every index code in the latest Excel/CSV sent in this chat (or a team document) against BIM: "
+          "found / not found / in BIM but not in the file, with an Excel result file.",
+          {"document_name": {"type": "string", "description": "Team document to use instead of the chat file (optional)"}}),
     _decl("validate_index_codes",
           "Run the OBK validation program on index codes typed by the user. Only when the user asks to validate/check them.",
           {"codes": {"type": "array", "items": {"type": "string"}, "description": "Index codes, max 10"}},

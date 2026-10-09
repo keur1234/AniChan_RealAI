@@ -21,6 +21,7 @@ from google.genai import types
 from urllib.parse import quote
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+import bim_index
 import docs_library
 import obk_files
 import obk_reference
@@ -67,6 +68,7 @@ THAI_WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พ�
 RESET_COMMANDS = {"/reset", "/ลืม", "ลืมให้หมด", "เริ่มใหม่"}
 CHECK_COMMANDS = ("/check", "/ตรวจ", "/เช็ค")
 SUMMARY_COMMANDS = ("/summary", "/สรุป")
+BIM_COMMANDS = ("/bim",)
 # LINE user IDs of the people responsible for Vicky. She only serves groups that
 # include one of them, and only they can use her in a 1:1 chat.
 ADMIN_USER_IDS = {u.strip() for u in os.getenv("ADMIN_USER_IDS", "").split(",") if u.strip()}
@@ -125,6 +127,10 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
   TYPE B = Running Number ซ้ำในไฟล์, N/A = ข้อยกเว้น ALLF หรือ suffix -A/-T/-H/NONE
 - ข้อมูลอ้างอิง (Reference Table) อัปเดตอัตโนมัติ: Equipment จาก Google Sheet, Area Code จากไฟล์ของผู้ดูแล
   /refs ดูสถานะและเวลาอัปเดตล่าสุด, /refresh (ผู้ดูแล) สั่งอัปเดตทันที
+- ค้น index codes ในระบบ BIM (ไฟล์ BIM ทุก Component ที่ระบบซิงก์ไว้) ด้วย find_in_bim
+  และเทียบทั้งไฟล์ Excel กับ BIM ด้วย compare_file_with_bim เมื่อผู้ใช้ถามว่า "เจอใน BIM ไหม" "มีใน BIM หรือเปล่า"
+  ผลจากเครื่องมือบอกเวลาข้อมูล BIM ให้แจ้งผู้ใช้ด้วย
+- คำสั่งลัด: /bim ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /bim, /bimstatus ดูสถานะข้อมูล BIM
 - คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
   /docs เพื่อดูรายชื่อเอกสารของทีม
 
@@ -344,6 +350,13 @@ def run_tool(name, args, ctx):
                 f.write(data)
             return vicky_tools.preview_file(path, file_name)
 
+        if name == "find_in_bim":
+            codes = [str(c) for c in args.get("codes", [])][:MAX_CODES_PER_MESSAGE]
+            if not bim_index.configured():
+                return {"error": "BIM source is not configured"}
+            bim_index.maybe_sync()
+            return {"report": bim_index.format_lookup(bim_index.lookup(codes), lang)}
+
         if name == "validate_index_codes":
             master = obk_validator.get_master()
             if master is None:
@@ -372,6 +385,12 @@ def run_tool(name, args, ctx):
                 f.write(data)
             return vicky_tools.preview_file(path, file_name)
 
+        if name == "compare_file_with_bim":
+            text, path, token = bim_compare(file_info, user_id)
+            if not path:
+                return {"error": text}
+            return {"summary": text, "_links": [file_link(ctx, token, path)]}
+
         if name in ("validate_raw_data_file", "summarize_raw_data_file"):
             file_name, result, token, error = validate_file_info(file_info, user_id)
             if error:
@@ -390,6 +409,63 @@ def run_tool(name, args, ctx):
         log.exception("Tool %s failed", name)
         return {"error": f"{type(e).__name__}: {e}"}
     return {"error": f"unknown tool {name}"}
+
+
+def bim_compare(file_info, user_id):
+    """Compare a chat file / team document with the BIM index. Returns (text, xlsx path or None, token)."""
+    lang = user_langs.get(user_id, "th")
+    if not bim_index.configured():
+        return tr(user_id, "ยังไม่ได้ตั้งค่าแหล่งไฟล์ BIM ค่ะ", "The BIM source is not configured."), None, None
+    if not bim_index.last_sync():
+        bim_index.sync_in_background()
+        return tr(user_id, "หนูกำลังซิงก์ข้อมูล BIM ครั้งแรกอยู่ค่ะ กรุณาลองใหม่อีกสักครู่",
+                  "I'm indexing the BIM files for the first time. Please try again in a few minutes."), None, None
+    bim_index.maybe_sync()
+    file_name = obk_files.safe_name(file_info.get("fileName", ""))
+    if not obk_files.is_supported(file_name):
+        return tr(user_id, f"หนูเทียบได้เฉพาะไฟล์ .xlsx .xlsm .xls และ .csv ค่ะ ไฟล์ที่ได้รับ: {file_name}",
+                  f"I can only compare .xlsx, .xlsm, .xls and .csv files. File received: {file_name}"), None, None
+    data = file_info.get("_data") or download_line_content(file_info["id"])[0]
+    token, out_dir = obk_files.new_job()
+    path = os.path.join(out_dir, file_name)
+    with open(path, "wb") as f:
+        f.write(data)
+    text, out_path = bim_index.compare_file(path, file_name, out_dir, lang)
+    return text, out_path, token
+
+
+def handle_bim(event, chat_id, user_id, text, mention_user_id=None):
+    """/bim <index codes> looks them up; /bim after sending a file compares the whole file."""
+    reply = lambda t, extra=(): send_reply(event["replyToken"], chat_id, t, extra, mention_user_id=mention_user_id)
+    lang = user_langs.get(user_id, "th")
+    if not bim_index.configured():
+        reply(tr(user_id, "ยังไม่ได้ตั้งค่าแหล่งไฟล์ BIM ค่ะ ผู้ดูแลตั้งค่า BIM_LOCAL_FOLDER หรือ BIM_DRIVE_FOLDER",
+                 "The BIM source is not configured (BIM_LOCAL_FOLDER or BIM_DRIVE_FOLDER)."))
+        return
+    codes = obk_validator.find_codes(text[len("/bim"):]) or text[len("/bim"):].split()
+    if codes:
+        bim_index.maybe_sync()
+        if not bim_index.last_sync():
+            bim_index.sync_in_background()
+            reply(tr(user_id, "หนูกำลังซิงก์ข้อมูล BIM ครั้งแรกอยู่ค่ะ กรุณาลองใหม่อีกสักครู่",
+                     "I'm indexing the BIM files for the first time. Please try again in a few minutes."))
+            return
+        answer = bim_index.format_lookup(bim_index.lookup(codes[:MAX_CODES_PER_MESSAGE]), lang)
+    else:
+        file_info = find_group_file(chat_id, user_id, event["message"].get("quotedMessageId"))
+        if not file_info:
+            reply(tr(user_id, "พิมพ์ /bim ตามด้วย index codes หรือส่งไฟล์ Excel ก่อนแล้วพิมพ์ /bim ค่ะ",
+                     "Type /bim followed by index codes, or send an Excel file first and then type /bim."))
+            return
+        if event.get("source", {}).get("type") == "user":
+            show_loading(user_id)
+        answer, path, token = bim_compare(file_info, user_id)
+        if path:
+            answer += download_links(user_id, event.get("_base_url", ""), token, [path])
+    with chat_locks[chat_id]:
+        remember(chat_id, text, answer)
+    store_chat_history_to_csv(chat_id, user_id, text, answer)
+    reply(answer)
 
 
 def fetch_document(name):
@@ -690,6 +766,20 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
         obk_reference.refresh(force=True)
         reply(tr(user_id, "หนูอัปเดตข้อมูลอ้างอิงแล้วค่ะ\n", "Reference data refreshed\n")
               + obk_reference.status_text(user_langs.get(user_id, "th")))
+        return True
+    if lowered.startswith("/bimsync"):
+        if user_id not in ADMIN_USER_IDS:
+            reply(tr(user_id, "คำสั่งนี้ใช้ได้เฉพาะผู้ดูแลค่ะ", "Only administrators can use this command."))
+            return True
+        started = bim_index.sync_in_background(force=True)
+        reply(tr(user_id, "หนูเริ่มซิงก์ข้อมูล BIM ใหม่ทั้งหมดแล้วค่ะ ดูความคืบหน้าด้วย /bimstatus" if started else "กำลังซิงก์อยู่แล้วค่ะ",
+                 "Started a full BIM sync; check /bimstatus." if started else "A sync is already running."))
+        return True
+    if lowered.startswith("/bimstatus"):
+        reply(bim_index.format_status(user_langs.get(user_id, "th")))
+        return True
+    if lowered.startswith(BIM_COMMANDS):
+        handle_bim(event, chat_id, user_id, text, mention_user_id)
         return True
     if lowered.startswith("/refs"):
         obk_validator.get_master()
@@ -996,6 +1086,9 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
             store_chat_history_to_csv(chat_id, user_id, history_text, reply)
 
     send_reply(event["replyToken"], chat_id, reply, mention_user_id=mention_user_id)
+
+
+bim_index.maybe_sync()          # index BIM files in the background when the bot starts
 
 
 def verify_signature(body, signature):
