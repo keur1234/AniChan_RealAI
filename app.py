@@ -135,6 +135,7 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - สรุปผล validation ตามรูปแบบ: index codes ทั้งหมด → Incorrect (TYPE C และ index codes ซ้ำ / Running Number ซ้ำ)
   → Validation result เช่น "TYPE A: 120 index codes 85.71%" ไม่มีวงเล็บ ทศนิยม 2 ตำแหน่ง ห้ามใช้คำว่า Red Flag
 - ถ้ามีผลจากเครื่องมือ validation ให้ยึดผลนั้น ห้ามเปลี่ยน TYPE หรือตัวเลขเอง
+- ผลจาก validate_raw_data_file (เหมือน /check) ให้ส่งข้อความ summary ตามที่ได้รับทุกบรรทัด ไม่ต้องจัดรูปแบบใหม่
 
 ## ข้อจำกัด
 - หนูแก้ไขโค้ด การตั้งค่า หรือรูปแบบรายงานมาตรฐานของบอทไม่ได้ ห้ามบอกว่า "แก้ไข/อัปเดตแล้ว" ให้แจ้งว่าต้องให้ผู้ดูแลระบบปรับ
@@ -375,7 +376,8 @@ def run_tool(name, args, ctx):
             file_name, result, token, error = validate_file_info(file_info, user_id)
             if error:
                 return {"error": error}
-            summary = obk_files.format_summary(result, file_name, lang)
+            summary = (obk_files.format_check_summary if name == "validate_raw_data_file" else obk_files.format_summary)(
+                result, file_name, lang)
             if result.get("skipped"):
                 return {"summary": summary}
             if name == "summarize_raw_data_file":
@@ -619,7 +621,7 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
     if not validated:
         return
     file_name, result, token = validated
-    summary = obk_files.format_summary(result, file_name, user_langs.get(user_id, "th"))
+    summary = obk_files.format_check_summary(result, file_name, user_langs.get(user_id, "th"))
     extra = []
     if not result.get("skipped"):
         outputs = result.get("outputs", [])

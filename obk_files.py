@@ -222,3 +222,25 @@ def new_job():
     out_dir = os.path.join(WORK_ROOT, token, "out")
     os.makedirs(out_dir, exist_ok=True)
     return token, out_dir
+
+
+def format_check_summary(result, file_name, lang='th'):
+    """/check reply for a file: the same console summary the original indexcode_validation.py prints."""
+    if result.get('skipped'):
+        return format_summary(result, file_name, lang)
+    total = result['records']
+    pct = lambda n: f"{(n / total * 100 if total else 0):.2f}%"
+    bfv, qlt = result['BFV_correct_format']['count'], result['QLT_type_a']['count']
+    lines = [
+        f"ใช้คอลัมน์: '{result['column_used']}'",
+        f"df หลัง filter: {total} rows",
+        "---- Review DataFrame Summary ----",
+        f"Total Records : {total}",
+        f"BFV (Correct BIM Format = TRUE) : {bfv} ({pct(bfv)})",
+        f"QLT (TYPE = TYPE A)             : {qlt} ({pct(qlt)})",
+        "  -- TYPE breakdown --",
+    ]
+    for typ, v in result['types'].items():
+        lines.append(f"    {typ:<11} : {v['count']} ({pct(v['count'])})")
+    lines.append(f"DUP (Asset ID ซ้ำ, mode={result.get('dup_mode', 'sheet')})     : {result['duplicates']}")
+    return "\n".join(lines)
