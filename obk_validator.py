@@ -40,7 +40,11 @@ CODE_CANDIDATE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.]*(?:-[A-Za-z0-9_.]+){4,
 
 def load_master(path):
     with open(path, encoding='utf-8') as f:
-        b = json.load(f)
+        return master_from_dict(json.load(f))
+
+
+def master_from_dict(b):
+    """Reference bundle dict -> lookup sets (same as master_from_bundle in validate_index_code.py)."""
     md = {k: set(b[k]) for k in ['equipment_type', 'equipment_code', 'main_system', 'sub_system', 'bim_id']}
     approved = set()
     for k in b.get('approve', []):
@@ -269,21 +273,7 @@ def format_report(results, lang='th'):
     return "\n".join(lines).strip()
 
 
-_master = None
-
-
 def get_master():
-    """Load the reference bundle once; None if it isn't configured."""
-    global _master
-    if _master is None:
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        path = os.getenv("OBK_BUNDLE_PATH") or "obk_ref_bundle.json"
-        # A relative path may be relative to where python was started or to the project folder
-        if not os.path.isabs(path) and not os.path.isfile(path):
-            path = os.path.join(app_dir, path)
-        path = os.path.abspath(path)
-        if os.path.isfile(path):
-            _master = load_master(path)
-        else:
-            log.warning("OBK reference bundle not found at %s", path)
-    return _master
+    """Current reference data (bundle + live sources, refreshed automatically); None if nothing is configured."""
+    import obk_reference
+    return obk_reference.get_master()

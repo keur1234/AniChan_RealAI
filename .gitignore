@@ -4,3 +4,5 @@ __pycache__/
 obk_ref_bundle*.json
 documents.xlsx
 ~$documents.xlsx
+obk_ref_cache.json
+obk_ref_cache.json.tmp

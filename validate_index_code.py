@@ -57,28 +57,39 @@ def load_approve(src):
                 t = d; break
         if t is None:
             raise SystemExit(f"ไม่พบชีทที่มีคอลัมน์ Equipement Code + Status ใน {src}")
+    return approve_from_table(t)
+
+def approve_from_table(t):
+    """approve table (DataFrame) → list ของ 'MAIN-SUB-EQUIP' เฉพาะ Status == Active"""
     t = t[t['Status'] == 'Active']
     keys = t[['MAIN SYSTEM CODE', 'SUB SYSTEM CODE', 'Equipement Code']].astype(str).agg('-'.join, axis=1)
     return sorted(set(keys))
 
-def build_bundle(mapping_path, location_path, approve_src):
+_sorted_set = lambda col: sorted(set(col.dropna().astype(str)))
+
+def mapping_part(mapping_path):
+    """ส่วนของ bundle ที่มาจากไฟล์ Mapping Concept"""
     m = pd.read_excel(mapping_path, header=3, sheet_name='Mapping Concept').dropna(axis=1, how='all')
-    loc = pd.read_excel(location_path, header=1, sheet_name='Register Location')
-    s = lambda col: sorted(set(col.dropna().astype(str)))
     clean = m.dropna(subset=['SUB SYSTEM CODE', 'SUB SYSTEM NAME'])
     code_to_name = {}
     for c, n in zip(clean['SUB SYSTEM CODE'].astype(str), clean['SUB SYSTEM NAME'].astype(str)):
         code_to_name.setdefault(c, n)          # เก็บลำดับตามไฟล์ (find_code ใช้ตัวแรกที่เจอ)
     return {
-        'equipment_type': s(m['Equipment Type']),
-        'equipment_code': s(m['Equipment Code']),
-        'main_system': s(m['SYSTEM CODE']),
-        'sub_system': s(m['SUB SYSTEM CODE']),
-        'bim_id': s(loc['BIM ID']),
+        'equipment_type': _sorted_set(m['Equipment Type']),
+        'equipment_code': _sorted_set(m['Equipment Code']),
+        'main_system': _sorted_set(m['SYSTEM CODE']),
+        'sub_system': _sorted_set(m['SUB SYSTEM CODE']),
         'sub_keywords': list(code_to_name.keys()),
         'sub_names': list(code_to_name.values()),
-        'approve': load_approve(approve_src),
     }
+
+def location_part(location_path):
+    """BIM ID (Area Code) จากไฟล์ Register Location"""
+    loc = pd.read_excel(location_path, header=1, sheet_name='Register Location')
+    return _sorted_set(loc['BIM ID'])
+
+def build_bundle(mapping_path, location_path, approve_src):
+    return {**mapping_part(mapping_path), 'bim_id': location_part(location_path), 'approve': load_approve(approve_src)}
 
 def master_from_bundle(b):
     """รวม reference + approve table → master_data (เหมือน load_master_data(drive=True))"""

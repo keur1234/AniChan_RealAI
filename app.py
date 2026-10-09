@@ -23,6 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 import docs_library
 import obk_files
+import obk_reference
 import obk_validator
 import vicky_tools
 
@@ -122,6 +123,8 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - Validation result: TYPE A = ผ่าน, TYPE B OR C = ไม่พบ Equipment/Asset Type ใน Reference Table,
   TYPE C = ผิดกฎบังคับ เช่น ความยาว ตัวอักษรพิเศษ จำนวนส่วน หรือ Component/Location/Floor/System ไม่อยู่ใน Reference Table,
   TYPE B = Running Number ซ้ำในไฟล์, N/A = ข้อยกเว้น ALLF หรือ suffix -A/-T/-H/NONE
+- ข้อมูลอ้างอิง (Reference Table) อัปเดตอัตโนมัติ: Equipment จาก Google Sheet, Area Code จากไฟล์ของผู้ดูแล
+  /refs ดูสถานะและเวลาอัปเดตล่าสุด, /refresh (ผู้ดูแล) สั่งอัปเดตทันที
 - คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
   /docs เพื่อดูรายชื่อเอกสารของทีม
 
@@ -677,6 +680,19 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
     """/docs, or a request that names a team document (from documents.xlsx). Returns True if handled."""
     reply = lambda t: send_reply(event["replyToken"], chat_id, t, mention_user_id=mention_user_id)
     lowered = text.lower()
+
+    if lowered.startswith("/refresh"):
+        if user_id not in ADMIN_USER_IDS:
+            reply(tr(user_id, "คำสั่งนี้ใช้ได้เฉพาะผู้ดูแลค่ะ", "Only administrators can use this command."))
+            return True
+        obk_reference.refresh(force=True)
+        reply(tr(user_id, "หนูอัปเดตข้อมูลอ้างอิงแล้วค่ะ\n", "Reference data refreshed\n")
+              + obk_reference.status_text(user_langs.get(user_id, "th")))
+        return True
+    if lowered.startswith("/refs"):
+        obk_validator.get_master()
+        reply(obk_reference.status_text(user_langs.get(user_id, "th")))
+        return True
 
     if lowered.startswith(DOC_LIST_COMMANDS):
         docs = docs_library.load()
