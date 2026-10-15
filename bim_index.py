@@ -128,8 +128,13 @@ def _drive_auth():
     if SERVICE_ACCOUNT_FILE:
         from google.auth.transport.requests import Request
         from google.oauth2 import service_account
+        key_file = SERVICE_ACCOUNT_FILE
+        if not os.path.isabs(key_file) and not os.path.isfile(key_file):
+            key_file = os.path.join(APP_DIR, key_file)          # relative to the project folder
+        if not os.path.isfile(key_file):
+            raise RuntimeError(f"service account key file not found: {key_file}")
         creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+            key_file, scopes=["https://www.googleapis.com/auth/drive.readonly"])
         creds.refresh(Request())
         return {"Authorization": f"Bearer {creds.token}"}, {}
     if DRIVE_API_KEY:
