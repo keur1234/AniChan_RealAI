@@ -11,6 +11,9 @@ Where the files come from (set one):
                        GOOGLE_SERVICE_ACCOUNT_FILE (folder shared with the service account)
                        or BIM_DRIVE_API_KEY (folder shared as "Anyone with the link")
 Only the newest file per component is used (by the date in the file name, then modified time).
+
+The index is refreshed once a week (BIM_SYNC_DAY at BIM_SYNC_TIME, Bangkok time; default Monday 06:00).
+If the bot was off at that time it catches up when it starts. Admins can force it with /bimsync.
 """
 import fnmatch
 import io
@@ -34,7 +37,11 @@ DRIVE_API_KEY = os.getenv("BIM_DRIVE_API_KEY", "")
 FILE_PATTERN = os.getenv("BIM_FILE_PATTERN", "*_25Digits_Combined*.xlsx")
 SHEET = os.getenv("BIM_SHEET", "Combined_25Digits")
 TAG_COLUMN = os.getenv("BIM_TAG_COLUMN", "OBK.FM_25Digits_TAG")
-SYNC_SECONDS = float(os.getenv("BIM_SYNC_HOURS", "12")) * 3600
+WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+SYNC_WEEKDAY = WEEKDAYS.index(os.getenv("BIM_SYNC_DAY", "mon").strip().lower()[:3])
+SYNC_HOUR, SYNC_MINUTE = (int(x) for x in os.getenv("BIM_SYNC_TIME", "06:00").split(":"))
+RETRY_SECONDS = 600            # after a failed attempt, wait before trying again
+SCHEDULER_CHECK_SECONDS = 1800
 
 # Columns kept for each element (missing ones are stored empty)
 DETAIL_COLUMNS = {
@@ -44,7 +51,7 @@ DETAIL_COLUMNS = {
 }
 
 _lock = threading.Lock()
-_state = {"syncing": False, "last_attempt": 0.0, "last_error": ""}
+_state = {"syncing": False, "last_attempt": 0.0, "last_error": "", "scheduler": False}
 
 
 # ---------------------------------------------------------------- database
@@ -260,10 +267,47 @@ def sync_in_background(force=False):
     return True
 
 
+def last_scheduled(now=None):
+    """The most recent weekly sync time that has already passed."""
+    now = now or datetime.now(BANGKOK)
+    slot = now.replace(hour=SYNC_HOUR, minute=SYNC_MINUTE, second=0, microsecond=0) \
+        - timedelta(days=(now.weekday() - SYNC_WEEKDAY) % 7)
+    return slot if slot <= now else slot - timedelta(days=7)
+
+
+def next_scheduled(now=None):
+    return last_scheduled(now) + timedelta(days=7)
+
+
+def is_due(now=None):
+    """True when the index has never been built or is older than the last weekly sync time."""
+    done = last_sync()
+    if not done:
+        return True
+    done_at = datetime.strptime(done, "%Y-%m-%d %H:%M").replace(tzinfo=BANGKOK)
+    return done_at < last_scheduled(now)
+
+
 def maybe_sync():
-    """Start a background sync when the index is older than BIM_SYNC_HOURS."""
-    if configured() and time.time() - _state["last_attempt"] >= SYNC_SECONDS:
+    """Start a background sync if the weekly one is due (and we didn't just fail)."""
+    if configured() and not _state["syncing"] and time.time() - _state["last_attempt"] >= RETRY_SECONDS and is_due():
         sync_in_background()
+
+
+def start_scheduler():
+    """Check every 30 minutes whether the weekly sync is due, so it runs even when nobody is chatting."""
+    if _state["scheduler"] or not configured():
+        return
+    _state["scheduler"] = True
+
+    def loop():
+        while True:
+            try:
+                maybe_sync()
+            except Exception:
+                log.exception("BIM scheduler")
+            time.sleep(SCHEDULER_CHECK_SECONDS)
+    threading.Thread(target=loop, daemon=True).start()
 
 
 # ---------------------------------------------------------------- queries
@@ -478,7 +522,10 @@ def format_status(lang="th"):
     if not s["configured"]:
         return _t(lang, "ยังไม่ได้ตั้งค่าแหล่งไฟล์ BIM (BIM_LOCAL_FOLDER หรือ BIM_DRIVE_FOLDER)",
                   "BIM source not configured (BIM_LOCAL_FOLDER or BIM_DRIVE_FOLDER)")
-    lines = [_t(lang, "สถานะข้อมูล BIM", "BIM index status"), f"Source: {s['source']}", _as_of(lang)]
+    nxt = next_scheduled()
+    lines = [_t(lang, "สถานะข้อมูล BIM", "BIM index status"), f"Source: {s['source']}", _as_of(lang),
+             _t(lang, f"อัปเดตอัตโนมัติทุกสัปดาห์ ครั้งถัดไป {nxt:%Y-%m-%d %H:%M}",
+                f"Updated weekly, next update {nxt:%Y-%m-%d %H:%M}")]
     if s["syncing"]:
         lines.append(_t(lang, "กำลังซิงก์อยู่", "Sync in progress"))
     total = sum(f["rows"] for f in s["files"])

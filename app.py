@@ -1088,7 +1088,7 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
     send_reply(event["replyToken"], chat_id, reply, mention_user_id=mention_user_id)
 
 
-bim_index.maybe_sync()          # index BIM files in the background when the bot starts
+bim_index.start_scheduler()     # weekly BIM index update (catches up at start-up if one was missed)
 
 
 def verify_signature(body, signature):
