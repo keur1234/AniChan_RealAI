@@ -534,3 +534,56 @@ def format_status(lang="th"):
     if s["error"]:
         lines.append("Error: " + s["error"])
     return "\n".join(lines)
+
+
+def search_partial(fragment, limit=20):
+    """Index codes in BIM that start with (or else contain) a fragment. Returns ([(tag, elements)], total matches)."""
+    frag = normalize(fragment)
+    if not frag or not os.path.exists(DB_PATH):
+        return [], 0
+    con = _connect()
+    try:
+        for pattern in (f"{frag}%", f"%{frag}%"):               # prefix uses the index; contains is the fallback
+            total = con.execute("SELECT COUNT(DISTINCT tag) FROM elements WHERE tag LIKE ?", (pattern,)).fetchone()[0]
+            if total:
+                rows = con.execute("SELECT tag, COUNT(*) FROM elements WHERE tag LIKE ? GROUP BY tag ORDER BY tag LIMIT ?",
+                                   (pattern, limit)).fetchall()
+                return rows, total
+        return [], 0
+    finally:
+        con.close()
+
+
+def format_partial(fragment, rows, total, lang="th"):
+    frag = normalize(fragment)
+    if not total:
+        return _t(lang, f"ไม่พบ index codes ที่มี {frag} ใน BIM", f"No index codes containing {frag} in BIM")
+    lines = [_t(lang, f"index codes ใน BIM ที่มี {frag}: {total:,} index codes", f"Index codes in BIM containing {frag}: {total:,}")]
+    lines += [f"- {tag}" + (_t(lang, f" {n} elements", f" {n} elements") if n > 1 else "") for tag, n in rows]
+    if total > len(rows):
+        lines.append(_t(lang, f"และอีก {total - len(rows):,} index codes พิมพ์ให้ยาวขึ้นเพื่อแคบผลลัพธ์",
+                        f"and {total - len(rows):,} more; type a longer part to narrow it down"))
+    return "\n".join(lines)
+
+
+# Part of an index code: has a letter and at least one dash, e.g. CUP-002-0027 or AC-AHUS (not dates like 2026-10-15)
+PARTIAL_RE = re.compile(r"(?<![A-Za-z0-9-])(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,5}(?![A-Za-z0-9-])")
+
+
+def find_partials(text):
+    return [m.group(0) for m in PARTIAL_RE.finditer(text) if len(m.group(0)) >= 5]
+
+
+def answer_lookup(tokens, lang="th"):
+    """Full index codes -> exact lookup; parts of codes -> partial search. One reply text."""
+    full = [t for t in tokens if t.count("-") >= 4]
+    parts = [t for t in tokens if t.count("-") < 4]
+    blocks = []
+    if full:
+        blocks.append(format_lookup(lookup(full), lang))
+    for p in parts[:3]:
+        rows, total = search_partial(p)
+        blocks.append(format_partial(p, rows, total, lang))
+    if parts and not full:
+        blocks.insert(0, _as_of(lang))
+    return "\n\n".join(blocks)

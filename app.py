@@ -130,6 +130,7 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - ค้น index codes ในระบบ BIM (ไฟล์ BIM ทุก Component ที่ระบบซิงก์ไว้) ด้วย find_in_bim
   และเทียบทั้งไฟล์ Excel กับ BIM ด้วย compare_file_with_bim เมื่อผู้ใช้ถามว่า "เจอใน BIM ไหม" "มีใน BIM หรือเปล่า"
   ผลจากเครื่องมือบอกเวลาข้อมูล BIM ให้แจ้งผู้ใช้ด้วย
+- พิมพ์ index codes หรือบางส่วนของ index code (เช่น CUP-002-0027) ระบบจะค้นใน BIM DB ให้ทันที find_in_bim รับบางส่วนได้
 - คำสั่งลัด: /bim ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /bim, /bimstatus ดูสถานะข้อมูล BIM
 - คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
   /docs เพื่อดูรายชื่อเอกสารของทีม
@@ -180,7 +181,7 @@ SCRIPT_LANGUAGES = [
 def _words_only(text):
     text = re.sub(r"^/\S+", " ", text)                     # /check
     text = re.sub(r"https?://\S+|@\S+", " ", text)          # links, @mentions
-    for code in obk_validator.find_codes(text):
+    for code in obk_validator.find_codes(text) + bim_index.find_partials(text):    # codes say nothing about language
         text = text.replace(code, " ")
     return text
 
@@ -355,7 +356,7 @@ def run_tool(name, args, ctx):
             if not bim_index.configured():
                 return {"error": "BIM source is not configured"}
             bim_index.maybe_sync()
-            return {"report": bim_index.format_lookup(bim_index.lookup(codes), lang)}
+            return {"report": bim_index.answer_lookup(codes, lang)}
 
         if name == "validate_index_codes":
             master = obk_validator.get_master()
@@ -450,7 +451,7 @@ def handle_bim(event, chat_id, user_id, text, mention_user_id=None):
             reply(tr(user_id, "หนูกำลังซิงก์ข้อมูล BIM ครั้งแรกอยู่ค่ะ กรุณาลองใหม่อีกสักครู่",
                      "I'm indexing the BIM files for the first time. Please try again in a few minutes."))
             return
-        answer = bim_index.format_lookup(bim_index.lookup(codes[:MAX_CODES_PER_MESSAGE]), lang)
+        answer = bim_index.answer_lookup(codes[:MAX_CODES_PER_MESSAGE], lang)
     else:
         file_info = find_group_file(chat_id, user_id, event["message"].get("quotedMessageId"))
         if not file_info:
@@ -1000,9 +1001,13 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
                                mention_user_id=mention_user_id)
         send_reply(reply_token, chat_id, check_help(user_id))
         return
+    lang = user_langs.get(user_id, "th")
+    bim_ready = bim_index.configured() and bim_index.last_sync()
     if codes:
-        report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes],
-                                                user_langs.get(user_id, "th"))
+        # Validation and BIM answered straight from our own data (reference tables + BIM DB), no Gemini
+        bim = bim_index.lookup(codes) if bim_ready else None
+        report = obk_validator.format_report([obk_validator.check_code(c, master) for c in codes], lang,
+                                             bim, bim_index._as_of(lang) if bim_ready else None)
         leftover = text
         for c in codes:
             leftover = leftover.replace(c, "")
@@ -1014,6 +1019,19 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             send_reply(reply_token, chat_id, report)
             return
         text = f"{text}\n\n[ผล validation จากระบบ / system validation result]\n{report}"
+    elif bim_ready and not check_command:
+        # Part of an index code (e.g. CUP-002-0027) with little else -> search the BIM DB directly
+        parts = bim_index.find_partials(text)
+        leftover = text
+        for p in parts:
+            leftover = leftover.replace(p, "")
+        if parts and len(leftover.strip()) <= 20:
+            answer = bim_index.answer_lookup(parts, lang)
+            with chat_locks[chat_id]:
+                remember(chat_id, text, answer)
+            store_chat_history_to_csv(chat_id, user_id, text, answer)
+            send_reply(reply_token, chat_id, answer)
+            return
     user_parts = [types.Part.from_text(text=text)]
     history_text = text
     return ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id)

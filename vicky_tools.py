@@ -140,7 +140,8 @@ FUNCTION_DECLARATIONS = [
     _decl("find_in_bim",
           "Look up index codes in the BIM system (all components' BIM exports, indexed locally). "
           "Use when the user asks whether index codes exist in BIM.",
-          {"codes": {"type": "array", "items": {"type": "string"}, "description": "Index codes, max 10"}}, ["codes"]),
+          {"codes": {"type": "array", "items": {"type": "string"},
+                     "description": "Full index codes or parts of them (e.g. CUP-002-0027), max 10"}}, ["codes"]),
     _decl("compare_file_with_bim",
           "Check every index code in the latest Excel/CSV sent in this chat (or a team document) against BIM: "
           "found / not found / in BIM but not in the file, with an Excel result file.",

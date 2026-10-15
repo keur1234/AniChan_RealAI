@@ -7,7 +7,6 @@ point OBK_BUNDLE_PATH at it.
 import difflib
 import json
 import logging
-import os
 import re
 
 log = logging.getLogger("vicky")
@@ -233,8 +232,20 @@ def summary_lines(total, dup_count, dup_lines, running_dup_count, type_counts, t
     return lines
 
 
-def format_report(results, lang='th'):
-    """Report for index codes typed in chat, in the agreed OBK format (no Markdown, no parentheses)."""
+def _bim_line(elements, lang):
+    if not elements:
+        return _t(lang, "BIM: ไม่พบ", "BIM: not found")
+    e = elements[0]
+    where = " | ".join(x for x in [e.get("bim_file"), e.get("discipline"), e.get("category"), e.get("family")] if x)
+    status = f" | Status {e['status']}" if e.get("status") else ""
+    return _t(lang, f"BIM: พบ {len(elements)} elements", f"BIM: {len(elements)} elements") + f" | {where}{status}"
+
+
+def format_report(results, lang='th', bim=None, bim_as_of=None):
+    """Report for index codes typed in chat, in the agreed OBK format (no Markdown, no parentheses).
+
+    bim: optional {index code: [BIM elements]} from bim_index.lookup, shown per code and as a summary.
+    """
     from collections import Counter
     total = len(results)
     seen = Counter(r['code'] for r in results)
@@ -245,11 +256,21 @@ def format_report(results, lang='th'):
     dup_lines = [_t(lang, f"  {c} ซ้ำ {seen[c]} ครั้ง", f"  {c} appears {seen[c]} times") for c in dup_codes]
     type_c_codes = list(dict.fromkeys(r['code'] for r in results if r['TYPE'] == 'TYPE C'))
     lines += summary_lines(total, len(dup_codes), dup_lines, 0, type_counts, type_c_codes, lang)
+    if bim is not None:
+        unique_codes = list(dict.fromkeys(r['code'].upper() for r in results))
+        found = sum(1 for c in unique_codes if bim.get(c))
+        n = len(unique_codes)
+        pct = lambda k: f"{(k / n * 100 if n else 0):.2f}%"
+        lines += ["", bim_as_of or "BIM",
+                  _t(lang, f"- พบใน BIM: {found:,} index codes {pct(found)}", f"- Found in BIM: {found:,} index codes {pct(found)}"),
+                  _t(lang, f"- ไม่พบใน BIM: {n - found:,} index codes {pct(n - found)}", f"- Not in BIM: {n - found:,} index codes {pct(n - found)}")]
     lines += ["", _t(lang, "รายละเอียด", "Details")]
     unique = list({r['code']: r for r in results}.values())
     for i, r in enumerate(unique, 1):
         lines.append(f"{i}. {r['code']}")
         lines.append(f"Validation result: {r['TYPE'] or '-'}")
+        if bim is not None:
+            lines.append(_bim_line(bim.get(r['code'].upper(), []), lang))
         reasons = r['reasons_th'] if lang == 'th' else r['reasons_en']
         if r['TYPE'] != 'TYPE A' and reasons:
             lines.append(_t(lang, "กฎที่ไม่ผ่าน:", "Failed rules:"))
