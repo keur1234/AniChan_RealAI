@@ -39,6 +39,8 @@ DRIVE_API_KEY = os.getenv("BIM_DRIVE_API_KEY", "")
 DOWNLOAD_DIR = os.getenv("BIM_DOWNLOAD_DIR") or os.path.join(APP_DIR, "bim_files")
 # Only the tag column is needed to answer "is it in BIM"; set BIM_TAG_ONLY=0 to also keep discipline, family...
 TAG_ONLY = os.getenv("BIM_TAG_ONLY", "1") == "1"
+# Only the files directly in the folder; set BIM_RECURSIVE=1 to include sub-folders
+RECURSIVE = os.getenv("BIM_RECURSIVE", "0") == "1"
 FILE_PATTERN = os.getenv("BIM_FILE_PATTERN", "*_25Digits_Combined*.xlsx")
 SHEET = os.getenv("BIM_SHEET", "Combined_25Digits")
 TAG_COLUMN = os.getenv("BIM_TAG_COLUMN", "OBK.FM_25Digits_TAG")
@@ -104,7 +106,9 @@ def _latest_per_component(files):
 # ---------------------------------------------------------------- sources
 def _local_files():
     files = []
-    for root, _, names in os.walk(LOCAL_FOLDER or DOWNLOAD_DIR):
+    for root, dirs, names in os.walk(LOCAL_FOLDER or DOWNLOAD_DIR):
+        if not RECURSIVE:
+            dirs.clear()                                   # don't go into sub-folders
         for name in names:
             if fnmatch.fnmatch(name.lower(), FILE_PATTERN.lower()) and not name.startswith("~$"):
                 path = os.path.join(root, name)
@@ -146,7 +150,7 @@ def _drive_files():
     import requests
     headers, params = _drive_auth()
     files, folders = [], [_folder_id(DRIVE_FOLDER)]
-    while folders:                                         # walk sub-folders too
+    while folders:
         folder = folders.pop()
         page = None
         while True:
@@ -160,7 +164,8 @@ def _drive_files():
             data = r.json()
             for item in data.get("files", []):
                 if item["mimeType"] == "application/vnd.google-apps.folder":
-                    folders.append(item["id"])
+                    if RECURSIVE:
+                        folders.append(item["id"])
                     continue
                 name = item["name"]
                 is_sheet = item["mimeType"] == "application/vnd.google-apps.spreadsheet"
@@ -240,11 +245,23 @@ def _download_with_gdown(say):
     except ImportError:
         raise RuntimeError("set GOOGLE_SERVICE_ACCOUNT_FILE or BIM_DRIVE_API_KEY, or pip install gdown")
     url = DRIVE_FOLDER if DRIVE_FOLDER.startswith("http") else f"https://drive.google.com/drive/folders/{DRIVE_FOLDER}"
-    say("downloading the whole folder with gdown (no API credentials set)")
-    paths = gdown.download_folder(url=url, output=DOWNLOAD_DIR, quiet=False, remaining_ok=True) or []
-    if len(paths) >= 50:
-        say("gdown downloads at most 50 files per folder; use an API key or service account for more")
-    return f"downloaded {len(paths)} file(s) with gdown"
+    say("listing the folder with gdown (no API credentials set)")
+    try:
+        listed = gdown.download_folder(url=url, output=DOWNLOAD_DIR, quiet=True, remaining_ok=True, skip_download=True) or []
+    except TypeError:                                       # old gdown without skip_download
+        paths = gdown.download_folder(url=url, output=DOWNLOAD_DIR, quiet=False, remaining_ok=True) or []
+        return f"downloaded {len(paths)} file(s) with gdown"
+    wanted = [f for f in listed
+              if (RECURSIVE or len(os.path.normpath(f.path).split(os.sep)) == 1)
+              and fnmatch.fnmatch(os.path.basename(f.path).lower(), FILE_PATTERN.lower())]
+    say(f"{len(wanted)} Excel file(s) in the folder")
+    for f in wanted:
+        target = os.path.join(DOWNLOAD_DIR, os.path.basename(f.path))
+        say(f"downloading {os.path.basename(f.path)}")
+        gdown.download(id=f.id, output=target, quiet=True)
+    if len(listed) >= 50:
+        say("gdown lists at most 50 files per folder; use an API key or service account for more")
+    return f"downloaded {len(wanted)} file(s) with gdown"
 
 
 # ---------------------------------------------------------------- sync
