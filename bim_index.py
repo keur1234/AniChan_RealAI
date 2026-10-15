@@ -5,11 +5,13 @@ Combined_25Digits with the index code in OBK.FM_25Digits_TAG. A background sync 
 files that changed since last time and stores the tags in a local SQLite database (bim_index.db).
 Lookups query that database and take milliseconds.
 
-Where the files come from (set one):
-- BIM_LOCAL_FOLDER     a folder on this computer, e.g. the folder Google Drive for Desktop syncs
-- BIM_DRIVE_FOLDER     the Google Drive folder link/ID, read with the Drive API using
-                       GOOGLE_SERVICE_ACCOUNT_FILE (folder shared with the service account)
-                       or BIM_DRIVE_API_KEY (folder shared as "Anyone with the link")
+How an update works (update_bim_db.py, /bimsync, or the weekly schedule):
+1. Download: if BIM_DRIVE_FOLDER is set, new or changed Excel files are downloaded from that
+   Google Drive folder into BIM_DOWNLOAD_DIR (default bim_files/). Access with
+   GOOGLE_SERVICE_ACCOUNT_FILE (folder shared with the service account), BIM_DRIVE_API_KEY,
+   or, with neither, gdown (folder shared as "Anyone with the link").
+2. Build: every Excel file in the local folder (BIM_LOCAL_FOLDER, or the download folder) is read,
+   sheet Combined_25Digits, column OBK.FM_25Digits_TAG, into the SQLite DB.
 Only the newest file per component is used (by the date in the file name, then modified time).
 
 The index is refreshed once a week (BIM_SYNC_DAY at BIM_SYNC_TIME, Bangkok time; default Monday 06:00).
@@ -34,6 +36,9 @@ LOCAL_FOLDER = os.getenv("BIM_LOCAL_FOLDER", "")
 DRIVE_FOLDER = os.getenv("BIM_DRIVE_FOLDER", "")
 SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "")
 DRIVE_API_KEY = os.getenv("BIM_DRIVE_API_KEY", "")
+DOWNLOAD_DIR = os.getenv("BIM_DOWNLOAD_DIR") or os.path.join(APP_DIR, "bim_files")
+# Only the tag column is needed to answer "is it in BIM"; set BIM_TAG_ONLY=0 to also keep discipline, family...
+TAG_ONLY = os.getenv("BIM_TAG_ONLY", "1") == "1"
 FILE_PATTERN = os.getenv("BIM_FILE_PATTERN", "*_25Digits_Combined*.xlsx")
 SHEET = os.getenv("BIM_SHEET", "Combined_25Digits")
 TAG_COLUMN = os.getenv("BIM_TAG_COLUMN", "OBK.FM_25Digits_TAG")
@@ -99,7 +104,7 @@ def _latest_per_component(files):
 # ---------------------------------------------------------------- sources
 def _local_files():
     files = []
-    for root, _, names in os.walk(LOCAL_FOLDER):
+    for root, _, names in os.walk(LOCAL_FOLDER or DOWNLOAD_DIR):
         for name in names:
             if fnmatch.fnmatch(name.lower(), FILE_PATTERN.lower()) and not name.startswith("~$"):
                 path = os.path.join(root, name)
@@ -179,13 +184,72 @@ def _drive_read(f):
 
 
 def configured():
+    """A source to update from is set (Drive folder or local folder)."""
     return bool(LOCAL_FOLDER or DRIVE_FOLDER)
+
+
+def ready():
+    """The DB has been built (by the bot or by update_bim_db.py) and can answer lookups."""
+    return bool(last_sync())
+
+
+def _manifest_path():
+    return os.path.join(DOWNLOAD_DIR, ".drive_manifest.json")
+
+
+def download_from_drive(force=False, progress=None):
+    """Download new or changed BIM Excel files from BIM_DRIVE_FOLDER into DOWNLOAD_DIR. Returns a report."""
+    import json
+    say = progress or (lambda msg: log.info("BIM download: %s", msg))
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    if not (SERVICE_ACCOUNT_FILE or DRIVE_API_KEY):
+        return _download_with_gdown(say)
+    try:
+        with open(_manifest_path(), encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        manifest = {}
+    files = _drive_files()
+    say(f"{len(files)} Excel file(s) in the Drive folder")
+    fetched = 0
+    for f in files:
+        path = os.path.join(DOWNLOAD_DIR, re.sub(r'[\\/:*?"<>|]', "_", f["name"]))
+        if not force and manifest.get(f["source_id"]) == f["modified"] and os.path.isfile(path):
+            continue
+        say(f"downloading {f['name']}")
+        data = _drive_read(f)
+        with open(path + ".part", "wb") as out:
+            out.write(data)
+        os.replace(path + ".part", path)
+        manifest[f["source_id"]] = f["modified"]
+        fetched += 1
+    with open(_manifest_path(), "w", encoding="utf-8") as out:
+        json.dump(manifest, out, indent=1)
+    return f"downloaded {fetched}, unchanged {len(files) - fetched}"
+
+
+def _download_with_gdown(say):
+    """No API credentials: let gdown fetch the shared folder (it must be 'Anyone with the link')."""
+    try:
+        import gdown
+    except ImportError:
+        raise RuntimeError("set GOOGLE_SERVICE_ACCOUNT_FILE or BIM_DRIVE_API_KEY, or pip install gdown")
+    url = DRIVE_FOLDER if DRIVE_FOLDER.startswith("http") else f"https://drive.google.com/drive/folders/{DRIVE_FOLDER}"
+    say("downloading the whole folder with gdown (no API credentials set)")
+    paths = gdown.download_folder(url=url, output=DOWNLOAD_DIR, quiet=False, remaining_ok=True) or []
+    if len(paths) >= 50:
+        say("gdown downloads at most 50 files per folder; use an API key or service account for more")
+    return f"downloaded {len(paths)} file(s) with gdown"
 
 
 # ---------------------------------------------------------------- sync
 def _read_tags(data):
     import pandas as pd
-    df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET, dtype=str)
+    try:
+        df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET, dtype=str,
+                           usecols=(lambda c: c == TAG_COLUMN) if TAG_ONLY else None)
+    except ValueError as e:                       # sheet missing
+        raise RuntimeError(f"sheet {SHEET} not found ({e})")
     if TAG_COLUMN not in df.columns:
         raise RuntimeError(f"column {TAG_COLUMN} not found in sheet {SHEET}")
     df = df[df[TAG_COLUMN].notna()]
@@ -197,15 +261,21 @@ def _read_tags(data):
     return rows
 
 
-def sync(force=False):
-    """Index new or changed BIM files. Returns a short report."""
+def sync(force=False, progress=None):
+    """Download (if a Drive folder is set) and index new or changed BIM files. Returns a short report."""
     if not configured():
         return "BIM source not configured (set BIM_LOCAL_FOLDER or BIM_DRIVE_FOLDER)"
     with _lock:
         _state["last_attempt"] = time.time()
-        use_drive = bool(DRIVE_FOLDER) and not LOCAL_FOLDER
+        download_report = ""
+        if DRIVE_FOLDER:
+            try:
+                download_report = download_from_drive(force, progress)
+            except Exception as e:                     # keep going with whatever is already downloaded
+                download_report = f"download failed: {e}"
+                log.warning("BIM sync: %s", download_report)
         try:
-            listed = _drive_files() if use_drive else _local_files()
+            listed = _local_files()
         except Exception as e:
             _state["last_error"] = f"listing failed: {e}"
             log.warning("BIM sync: %s", _state["last_error"])
@@ -220,7 +290,9 @@ def sync(force=False):
                 if not force and key in known and known[key][1] == f["source_id"] and known[key][2] == f["modified"]:
                     continue
                 try:
-                    rows = _read_tags(_drive_read(f) if use_drive else _local_read(f))
+                    if progress:
+                        progress(f"reading {f['name']}")
+                    rows = _read_tags(_local_read(f))
                 except Exception as e:
                     errors.append(f"{f['name']}: {e}")
                     log.warning("BIM sync: %s failed: %s", f["name"], e)
@@ -244,7 +316,7 @@ def sync(force=False):
         finally:
             con.close()
         _state["last_error"] = "; ".join(errors)
-        parts = [f"updated {len(updated)} file(s)" + (": " + ", ".join(updated) if updated else ""),
+        parts = ([download_report] if download_report else []) + [f"indexed {len(updated)} file(s)" + (": " + ", ".join(updated) if updated else ""),
                  f"unchanged {len(wanted) - len(updated) - len(errors)}"]
         if gone:
             parts.append(f"removed {', '.join(sorted(gone))}")
@@ -364,7 +436,8 @@ def count_by_tag(codes):
 
 def status():
     """Files in the index, for /bimstatus."""
-    info = {"configured": configured(), "source": "local folder" if LOCAL_FOLDER else ("Google Drive" if DRIVE_FOLDER else "-"),
+    info = {"configured": configured(),
+            "source": "Google Drive -> " + DOWNLOAD_DIR if DRIVE_FOLDER else (LOCAL_FOLDER or "update_bim_db.py"),
             "last_sync": last_sync(), "syncing": _state["syncing"], "error": _state["last_error"], "files": []}
     if os.path.exists(DB_PATH):
         con = _connect()
@@ -519,7 +592,7 @@ def compare_file(path, file_name, out_dir, lang="th"):
 
 def format_status(lang="th"):
     s = status()
-    if not s["configured"]:
+    if not s["configured"] and not ready():
         return _t(lang, "ยังไม่ได้ตั้งค่าแหล่งไฟล์ BIM (BIM_LOCAL_FOLDER หรือ BIM_DRIVE_FOLDER)",
                   "BIM source not configured (BIM_LOCAL_FOLDER or BIM_DRIVE_FOLDER)")
     nxt = next_scheduled()

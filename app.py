@@ -353,8 +353,8 @@ def run_tool(name, args, ctx):
 
         if name == "find_in_bim":
             codes = [str(c) for c in args.get("codes", [])][:MAX_CODES_PER_MESSAGE]
-            if not bim_index.configured():
-                return {"error": "BIM source is not configured"}
+            if not bim_index.ready():
+                return {"error": bim_not_ready_text(user_id)}
             bim_index.maybe_sync()
             return {"report": bim_index.answer_lookup(codes, lang)}
 
@@ -412,15 +412,21 @@ def run_tool(name, args, ctx):
     return {"error": f"unknown tool {name}"}
 
 
+def bim_not_ready_text(user_id):
+    """Why BIM lookups can't be answered yet."""
+    if bim_index.configured():
+        bim_index.sync_in_background()
+        return tr(user_id, "หนูกำลังสร้างข้อมูล BIM ครั้งแรกอยู่ค่ะ กรุณาลองใหม่อีกสักครู่",
+                  "I'm building the BIM data for the first time. Please try again in a few minutes.")
+    return tr(user_id, "ยังไม่มีข้อมูล BIM ค่ะ ผู้ดูแลรัน update_bim_db.py เพื่อสร้างข้อมูลก่อน",
+              "There is no BIM data yet. An administrator needs to run update_bim_db.py first.")
+
+
 def bim_compare(file_info, user_id):
     """Compare a chat file / team document with the BIM index. Returns (text, xlsx path or None, token)."""
     lang = user_langs.get(user_id, "th")
-    if not bim_index.configured():
-        return tr(user_id, "ยังไม่ได้ตั้งค่าแหล่งไฟล์ BIM ค่ะ", "The BIM source is not configured."), None, None
-    if not bim_index.last_sync():
-        bim_index.sync_in_background()
-        return tr(user_id, "หนูกำลังซิงก์ข้อมูล BIM ครั้งแรกอยู่ค่ะ กรุณาลองใหม่อีกสักครู่",
-                  "I'm indexing the BIM files for the first time. Please try again in a few minutes."), None, None
+    if not bim_index.ready():
+        return bim_not_ready_text(user_id), None, None
     bim_index.maybe_sync()
     file_name = obk_files.safe_name(file_info.get("fileName", ""))
     if not obk_files.is_supported(file_name):
@@ -439,18 +445,12 @@ def handle_bim(event, chat_id, user_id, text, mention_user_id=None):
     """/bim <index codes> looks them up; /bim after sending a file compares the whole file."""
     reply = lambda t, extra=(): send_reply(event["replyToken"], chat_id, t, extra, mention_user_id=mention_user_id)
     lang = user_langs.get(user_id, "th")
-    if not bim_index.configured():
-        reply(tr(user_id, "ยังไม่ได้ตั้งค่าแหล่งไฟล์ BIM ค่ะ ผู้ดูแลตั้งค่า BIM_LOCAL_FOLDER หรือ BIM_DRIVE_FOLDER",
-                 "The BIM source is not configured (BIM_LOCAL_FOLDER or BIM_DRIVE_FOLDER)."))
+    if not bim_index.ready():
+        reply(bim_not_ready_text(user_id))
         return
     codes = obk_validator.find_codes(text[len("/bim"):]) or text[len("/bim"):].split()
     if codes:
         bim_index.maybe_sync()
-        if not bim_index.last_sync():
-            bim_index.sync_in_background()
-            reply(tr(user_id, "หนูกำลังซิงก์ข้อมูล BIM ครั้งแรกอยู่ค่ะ กรุณาลองใหม่อีกสักครู่",
-                     "I'm indexing the BIM files for the first time. Please try again in a few minutes."))
-            return
         answer = bim_index.answer_lookup(codes[:MAX_CODES_PER_MESSAGE], lang)
     else:
         file_info = find_group_file(chat_id, user_id, event["message"].get("quotedMessageId"))
@@ -772,6 +772,10 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
         if user_id not in ADMIN_USER_IDS:
             reply(tr(user_id, "คำสั่งนี้ใช้ได้เฉพาะผู้ดูแลค่ะ", "Only administrators can use this command."))
             return True
+        if not bim_index.configured():
+            reply(tr(user_id, "ยังไม่ได้ตั้ง BIM_DRIVE_FOLDER ค่ะ อัปเดตด้วยการรัน update_bim_db.py บนเครื่องแทน",
+                     "BIM_DRIVE_FOLDER is not set; update by running update_bim_db.py on the bot's computer."))
+            return True
         started = bim_index.sync_in_background(force=True)
         reply(tr(user_id, "หนูเริ่มซิงก์ข้อมูล BIM ใหม่ทั้งหมดแล้วค่ะ ดูความคืบหน้าด้วย /bimstatus" if started else "กำลังซิงก์อยู่แล้วค่ะ",
                  "Started a full BIM sync; check /bimstatus." if started else "A sync is already running."))
@@ -1002,7 +1006,7 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
         send_reply(reply_token, chat_id, check_help(user_id))
         return
     lang = user_langs.get(user_id, "th")
-    bim_ready = bim_index.configured() and bim_index.last_sync()
+    bim_ready = bim_index.ready()
     if codes:
         # Validation and BIM answered straight from our own data (reference tables + BIM DB), no Gemini
         bim = bim_index.lookup(codes) if bim_ready else None
