@@ -1,4 +1,5 @@
 """Validate Excel/CSV files sent in LINE and keep the outputs downloadable for a while."""
+import logging
 import os
 import re
 import secrets
@@ -78,7 +79,21 @@ def validate_file(file_name, data):
         f.write(data)
 
     result = vic.process_file(path, obk_validator.get_master(), os.path.join(job_dir, "out"), room=True, dup_mode='sheet')
+    _add_bim_column(result)
     return result, token
+
+
+def _add_bim_column(result):
+    """Add "Found in BIM" to the validation workbooks when the BIM DB is available."""
+    import bim_index
+    if result.get('skipped') or not bim_index.ready():
+        return
+    for p in result.get('outputs', []):
+        if p.endswith('.xlsx'):
+            try:
+                bim_index.add_found_column(p)
+            except Exception:
+                logging.getLogger(__name__).exception("Adding Found in BIM to %s failed", p)
 
 
 SKIP_REASONS_EN = {
@@ -166,6 +181,13 @@ def build_summary_workbook(result, file_name, lang='th'):
         'Times found': dup['Dup Count'].astype(int),
         'Source Sheets': dup['Source Sheets'],
     }).sort_values('Times found', ascending=False)
+    if 'Found in BIM' in df.columns:
+        incorrect['Found in BIM'] = df.loc[incorrect.index, 'Found in BIM'].values
+        duplicates['Found in BIM'] = df.loc[duplicates.index, 'Found in BIM'].values
+        unique_codes = df.drop_duplicates('Asset ID')
+        found = int((unique_codes['Found in BIM'] == 'Yes').sum())
+        summary_rows += [['Unique index codes', len(unique_codes)],
+                         ['Found in BIM', found], ['Not in BIM', len(unique_codes) - found]]
 
     sheets = [
         ('By Sheet', _pivot(df, 'Source Sheet')),

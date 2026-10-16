@@ -497,6 +497,43 @@ def count_by_tag(codes):
         con.close()
 
 
+def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="Asset ID"):
+    """Append a "Found in BIM" (Yes/No) column to the given sheets of a validation output workbook."""
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+
+    wb = load_workbook(xlsx_path)
+    targets = []
+    for name in sheets:
+        if name not in wb.sheetnames:
+            continue
+        ws = wb[name]
+        headers = [c.value for c in ws[1]]
+        if code_header not in headers or "Found in BIM" in headers:
+            continue
+        targets.append((ws, headers.index(code_header) + 1))
+    if not targets:
+        return False
+    codes = {normalize(ws.cell(r, col).value) for ws, col in targets for r in range(2, ws.max_row + 1)
+             if ws.cell(r, col).value is not None}
+    counts = count_by_tag(codes)
+    for ws, col in targets:
+        new = ws.max_column + 1
+        head = ws.cell(1, new, "Found in BIM")
+        ref = ws.cell(1, col)
+        if ref.has_style:
+            head._style = ref._style
+        for r in range(2, ws.max_row + 1):
+            value = ws.cell(r, col).value
+            if value is not None:
+                ws.cell(r, new, "Yes" if counts.get(normalize(value)) else "No")
+        ws.column_dimensions[get_column_letter(new)].width = 14
+        if ws.auto_filter.ref:
+            ws.auto_filter.ref = ws.dimensions
+    wb.save(xlsx_path)
+    return True
+
+
 def status():
     """Files in the index, for /bimstatus."""
     info = {"configured": configured(),
@@ -583,16 +620,17 @@ def _tags_with_components(components):
         con.close()
 
 
-def compare_file(path, file_name, out_dir, lang="th"):
-    """Check every index code of a file against BIM. Returns (reply text, xlsx path or None)."""
+def compare_file(path, file_name, out_dir, lang="th", with_stats=False):
+    """Check every index code of a file against BIM. Returns (reply text, xlsx path or None[, stats])."""
     import pandas as pd
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     codes_df, col = _codes_from_file(path)
     if codes_df is None or codes_df.empty:
-        return _t(lang, f"หนูไม่พบคอลัมน์ index codes ในไฟล์ {file_name} ค่ะ",
-                  f"I couldn't find an index codes column in {file_name}."), None
+        msg = _t(lang, f"หนูไม่พบคอลัมน์ index codes ในไฟล์ {file_name} ค่ะ",
+                 f"I couldn't find an index codes column in {file_name}.")
+        return (msg, None, None) if with_stats else (msg, None)
 
     unique = list(dict.fromkeys(codes_df["index codes"]))
     details = lookup(unique, per_code=1)
@@ -651,6 +689,9 @@ def compare_file(path, file_name, out_dir, lang="th"):
         lines.append(_t(lang, f"  และอีก {len(missing) - 10:,} index codes ดูในไฟล์", f"  and {len(missing) - 10:,} more in the file"))
     lines.append(_t(lang, f"มีใน BIM แต่ไม่มีในไฟล์: {len(only_in_bim):,} index codes Component {', '.join(sorted(components))}",
                     f"In BIM but not in the file: {len(only_in_bim):,} index codes, components {', '.join(sorted(components))}"))
+    if with_stats:
+        stats = {"total": total, "found": found, "missing": len(missing), "only_in_bim": len(only_in_bim)}
+        return "\n".join(lines), path_out, stats
     return "\n".join(lines), path_out
 
 

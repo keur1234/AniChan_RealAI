@@ -409,6 +409,10 @@ def run_tool(name, args, ctx):
                 paths = [obk_files.build_summary_workbook(result, file_name, lang)]
             else:
                 paths = [p for p in result.get("outputs", []) if not p.endswith(".png")]
+                bim_text, bim_path = bim_check_section(token, file_name)
+                if bim_text:
+                    summary += "\n" + bim_text
+                    paths.append(bim_path)
             return {"summary": summary, "files": [os.path.basename(p) for p in paths],
                     "_links": [file_link(ctx, token, p) for p in paths]}
     except Exception as e:
@@ -699,6 +703,31 @@ def download_links(user_id, base_url, token, paths):
               f"\n\nDownload, links expire in {hours} hours\n") + "\n".join(links)
 
 
+def bim_check_section(token, file_name):
+    """/check extra: the validated file against the BIM DB. Returns (text, xlsx path) or ("", None) if no BIM data."""
+    if not bim_index.ready():
+        return "", None
+    job_dir = os.path.join(obk_files.WORK_ROOT, token)
+    try:
+        _, path, stats = bim_index.compare_file(os.path.join(job_dir, obk_files.safe_name(file_name)), file_name,
+                                                os.path.join(job_dir, "out"), "en", with_stats=True)
+    except Exception:
+        log.exception("BIM check failed")
+        return "", None
+    if not stats:
+        return "", None
+    n = stats["total"]
+    pct = lambda k: f"{(k / n * 100 if n else 0):.2f}%"
+    text = "\n".join([
+        f"---- BIM Check (BIM data {bim_index.last_sync()}) ----",
+        f"Unique index codes : {n}",
+        f"Found in BIM       : {stats['found']} ({pct(stats['found'])})",
+        f"Not in BIM         : {stats['missing']} ({pct(stats['missing'])})",
+        f"In BIM not in file : {stats['only_in_bim']}",
+    ])
+    return text, path
+
+
 def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id=None):
     message = message or event["message"]
 
@@ -712,7 +741,11 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
     summary = obk_files.format_check_summary(result, file_name, user_langs.get(user_id, "th"))
     extra = []
     if not result.get("skipped"):
-        outputs = result.get("outputs", [])
+        outputs = list(result.get("outputs", []))
+        bim_text, bim_path = bim_check_section(token, file_name)
+        if bim_text:
+            summary += "\n" + bim_text
+            outputs.append(bim_path)
         for path in outputs:
             if path.endswith(".png"):
                 url = f"{base_url}/files/{token}/{quote(os.path.basename(path))}"
