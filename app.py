@@ -719,11 +719,10 @@ def bim_check_section(token, file_name):
     n = stats["total"]
     pct = lambda k: f"{(k / n * 100 if n else 0):.2f}%"
     text = "\n".join([
-        f"---- BIM Check (BIM data {bim_index.last_sync()}) ----",
+        f"---- Match with Bimberly (BIM data {bim_index.last_sync()}) ----",
         f"Unique index codes : {n}",
         f"Found in BIM       : {stats['found']} ({pct(stats['found'])})",
         f"Not in BIM         : {stats['missing']} ({pct(stats['missing'])})",
-        f"In BIM not in file : {stats['only_in_bim']}",
     ])
     return text, path
 
