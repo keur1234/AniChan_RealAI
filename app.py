@@ -72,6 +72,11 @@ BIM_COMMANDS = ("/bim",)
 # LINE user IDs of the people responsible for Vicky. She only serves groups that
 # include one of them, and only they can use her in a 1:1 chat.
 ADMIN_USER_IDS = {u.strip() for u in os.getenv("ADMIN_USER_IDS", "").split(",") if u.strip()}
+# People allowed to use Vicky in a private chat besides admins: "name=LINE user ID" pairs (names are just labels)
+PRIVATE_CHAT_USERS = {u.split("=", 1)[-1].strip(): u.split("=", 1)[0].strip()
+                      for u in os.getenv("PRIVATE_CHAT_USERS", "").split(",") if u.strip()}
+# Optional: POST /debug/chat for testing with Postman, enabled only when this key is set
+DEBUG_API_KEY = os.getenv("DEBUG_API_KEY", "")
 GROUP_CHECK_TTL_SECONDS = 600
 MAX_CODES_PER_MESSAGE = 10
 # In groups Vicky only answers /check, plus chat when @mentioned (set to 0 to answer /check only)
@@ -547,8 +552,14 @@ def mention_message(text, user_id):
     }
 
 
+_capture = threading.local()
+
+
 def post_messages(reply_token, to, messages):
     """Reply with the reply token; fall back to push if the token expired. Returns True on success."""
+    if getattr(_capture, "messages", None) is not None:          # /debug/chat: keep the reply instead of sending it
+        _capture.messages.extend(messages)
+        return True
     try:
         r = requests.post(LINE_REPLY_API, headers=line_headers(),
                           data=json.dumps({"replyToken": reply_token, "messages": messages}), timeout=10)
@@ -904,6 +915,15 @@ def group_has_admin(source):
     return False
 
 
+def display_name(user_id):
+    """LINE display name of a user who has added Vicky as a friend (for logs); '' if unknown."""
+    try:
+        r = requests.get(f"https://api.line.me/v2/bot/profile/{user_id}", headers=line_headers(), timeout=5)
+        return r.json().get("displayName", "") if r.status_code == 200 else ""
+    except (requests.exceptions.RequestException, ValueError):
+        return ""
+
+
 def leave_group(event):
     """Explain and leave a group that has no admin in it."""
     source = event.get("source", {})
@@ -929,8 +949,9 @@ def handle_event(event, base_url=""):
     user_id = source.get("userId", "")
     in_group = source.get("type") in ("group", "room")
 
+    can_chat_privately = user_id in ADMIN_USER_IDS or user_id in PRIVATE_CHAT_USERS
     if event.get("type") == "follow" and "replyToken" in event:          # someone added Vicky as a friend
-        if user_id not in ADMIN_USER_IDS:
+        if not can_chat_privately:
             post_messages(event["replyToken"], user_id, [{"type": "text", "text": GROUP_ONLY_TEXT}])
         return
     if event.get("type") == "join" and in_group:                          # Vicky was added to a group
@@ -942,13 +963,14 @@ def handle_event(event, base_url=""):
 
     if in_group and not group_has_admin(source):
         return leave_group(event)
-    if not in_group and user_id not in ADMIN_USER_IDS:
+    if not in_group and not can_chat_privately:
         message = event["message"]
         if message.get("type") == "text" and message["text"].strip().lower() == "/myid":
             post_messages(event["replyToken"], user_id, [{"type": "text", "text": f"Your LINE user ID: {user_id}"}])
         else:
             post_messages(event["replyToken"], user_id, [{"type": "text", "text": GROUP_ONLY_TEXT}])
-        log.info("Private chat from non-admin %s refused", user_id[-6:])
+        log.info("Private chat refused: %s %s (add 'name=%s' to PRIVATE_CHAT_USERS to allow)",
+                 display_name(user_id), user_id, user_id)
         return
 
     # Groups/rooms share one memory so Vicky follows the group conversation
@@ -1139,6 +1161,36 @@ def webhook():
     for event in payload.get("events", []):
         executor.submit(run_safely, event, base_url)
     return "OK", 200
+
+
+@app.route("/debug/chat", methods=["POST"])
+def debug_chat():
+    """Test Vicky without LINE (e.g. from Postman). Needs DEBUG_API_KEY in .env and header X-Debug-Key.
+
+    Body: {"text": "...", "user_id": "U...", "group": true}  ("group" makes it a group message mentioning Vicky)
+    Returns the messages Vicky would send.
+    """
+    if not DEBUG_API_KEY or not hmac.compare_digest(request.headers.get("X-Debug-Key", ""), DEBUG_API_KEY):
+        abort(404)
+    data = request.get_json(force=True, silent=True) or {}
+    text = str(data.get("text", ""))
+    user_id = str(data.get("user_id") or next(iter(ADMIN_USER_IDS), "debug-user"))
+    if data.get("group"):
+        source = {"type": "group", "groupId": "debug-group", "userId": user_id}
+        mention = {"mentionees": [{"index": 0, "length": len("@Vicky"), "isSelf": True}]}
+        message = {"type": "text", "id": "debug", "text": "@Vicky " + text, "mention": mention}
+        _group_access["debug-group"] = (True, time.time())          # skip the admin-in-group check
+    else:
+        source = {"type": "user", "userId": user_id}
+        message = {"type": "text", "id": "debug", "text": text}
+    _capture.messages = []
+    try:
+        handle_event({"type": "message", "replyToken": "debug", "source": source, "message": message},
+                     PUBLIC_BASE_URL or request.url_root.rstrip("/"))
+        replies = [m.get("text") or m for m in _capture.messages]
+    finally:
+        _capture.messages = None
+    return {"replies": replies}
 
 
 @app.route("/files/<token>/<path:name>", methods=["GET"])
