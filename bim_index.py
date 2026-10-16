@@ -41,8 +41,13 @@ DOWNLOAD_DIR = os.getenv("BIM_DOWNLOAD_DIR") or os.path.join(APP_DIR, "bim_files
 TAG_ONLY = os.getenv("BIM_TAG_ONLY", "1") == "1"
 # Only the files directly in the folder; set BIM_RECURSIVE=1 to include sub-folders
 RECURSIVE = os.getenv("BIM_RECURSIVE", "0") == "1"
-FILE_PATTERN = os.getenv("BIM_FILE_PATTERN", "*_25Digits_Combined*.xlsx")
+# Files to read (';'-separated patterns)
+FILE_PATTERNS = [p.strip() for p in os.getenv("BIM_FILE_PATTERN", "*_25Digits_Combined*.xlsx;CI_*.xlsx;CI_*.xlsm").split(";") if p.strip()]
 SHEET = os.getenv("BIM_SHEET", "Combined_25Digits")
+# Files whose name matches a pattern read these sheets instead of SHEET, combined into one list
+# (format "pattern=sheet,sheet;pattern=sheet,..."); CI_ files have one sheet per area
+SHEET_RULES = [(rule.split("=", 1)[0].strip(), [x.strip() for x in rule.split("=", 1)[1].split(",") if x.strip()])
+               for rule in os.getenv("BIM_SHEET_RULES", "CI_*=P01,P02,P03,P04,P06").split(";") if "=" in rule]
 TAG_COLUMN = os.getenv("BIM_TAG_COLUMN", "OBK.FM_25Digits_TAG")
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 SYNC_WEEKDAY = WEEKDAYS.index(os.getenv("BIM_SYNC_DAY", "mon").strip().lower()[:3])
@@ -83,10 +88,25 @@ def normalize(code):
 
 
 # ---------------------------------------------------------------- choosing files
+def _matches(name):
+    return any(fnmatch.fnmatch(name.lower(), p.lower()) for p in FILE_PATTERNS) and not name.startswith("~$")
+
+
+def sheets_for(name):
+    """Sheets to read from a file: the first matching BIM_SHEET_RULES entry, else SHEET."""
+    for pattern, sheets in SHEET_RULES:
+        if fnmatch.fnmatch(os.path.basename(name).lower(), pattern.lower()):
+            return sheets
+    return [SHEET]
+
+
 def _component_and_version(name):
-    """CUP_25Digits_Combined_20261002.xlsx -> ('CUP', '20261002')."""
+    """CUP_25Digits_Combined_20261002.xlsx -> ('CUP', '20261002'); CI_Z3_20261001.xlsx -> ('CI_Z3', '20261001')."""
     stem = os.path.splitext(os.path.basename(name))[0]
-    component = re.split(r"_25Digits", stem, flags=re.IGNORECASE)[0] or stem
+    if re.search(r"_25Digits", stem, flags=re.IGNORECASE):
+        component = re.split(r"_25Digits", stem, flags=re.IGNORECASE)[0] or stem
+    else:                                                  # drop a trailing date / revision, keep the name
+        component = re.sub(r"[_\- ]*\d{8}.*$", "", stem) or stem
     dates = re.findall(r"(\d{8})", stem)
     return component.upper(), (dates[-1] if dates else "")
 
@@ -110,7 +130,7 @@ def _local_files():
         if not RECURSIVE:
             dirs.clear()                                   # don't go into sub-folders
         for name in names:
-            if fnmatch.fnmatch(name.lower(), FILE_PATTERN.lower()) and not name.startswith("~$"):
+            if _matches(name):
                 path = os.path.join(root, name)
                 files.append({"name": name, "source_id": path, "link": path,
                               "modified": datetime.fromtimestamp(os.path.getmtime(path), BANGKOK).isoformat()})
@@ -171,7 +191,7 @@ def _drive_files():
                 is_sheet = item["mimeType"] == "application/vnd.google-apps.spreadsheet"
                 if is_sheet:
                     name += ".xlsx"
-                if fnmatch.fnmatch(name.lower(), FILE_PATTERN.lower()):
+                if _matches(name):
                     files.append({"name": name, "source_id": item["id"], "modified": item["modifiedTime"],
                                   "link": item.get("webViewLink", ""), "google_sheet": is_sheet})
             page = data.get("nextPageToken")
@@ -253,7 +273,7 @@ def _download_with_gdown(say):
         return f"downloaded {len(paths)} file(s) with gdown"
     wanted = [f for f in listed
               if (RECURSIVE or len(os.path.normpath(f.path).split(os.sep)) == 1)
-              and fnmatch.fnmatch(os.path.basename(f.path).lower(), FILE_PATTERN.lower())]
+              and _matches(os.path.basename(f.path))]
     say(f"{len(wanted)} Excel file(s) in the folder")
     for f in wanted:
         target = os.path.join(DOWNLOAD_DIR, os.path.basename(f.path))
@@ -265,21 +285,42 @@ def _download_with_gdown(say):
 
 
 # ---------------------------------------------------------------- sync
-def _read_tags(data):
+def _read_sheet(book, sheet):
+    """One sheet as a DataFrame whose header row is the one holding TAG_COLUMN (searched in the first 10 rows)."""
     import pandas as pd
-    try:
-        df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET, dtype=str,
-                           usecols=(lambda c: c == TAG_COLUMN) if TAG_ONLY else None)
-    except ValueError as e:                       # sheet missing
-        raise RuntimeError(f"sheet {SHEET} not found ({e})")
-    if TAG_COLUMN not in df.columns:
-        raise RuntimeError(f"column {TAG_COLUMN} not found in sheet {SHEET}")
-    df = df[df[TAG_COLUMN].notna()]
+    raw = pd.read_excel(book, sheet_name=sheet, dtype=str, header=None)
+    for i in range(min(10, len(raw))):
+        row = [str(v).strip() for v in raw.iloc[i].tolist()]
+        if TAG_COLUMN in row:
+            df = raw.iloc[i + 1:].copy()
+            df.columns = [str(v).strip() if str(v) != "nan" else f"col{j}" for j, v in enumerate(raw.iloc[i].tolist())]
+            df = df.loc[:, ~df.columns.duplicated()]
+            return df[[TAG_COLUMN]] if TAG_ONLY else df
+    raise RuntimeError(f"column {TAG_COLUMN} not found in sheet {sheet}")
+
+
+def _read_tags(data, name=""):
+    """Tags (and details) from a BIM file: its sheet(s) per sheets_for(name), combined."""
+    import pandas as pd
+    book = pd.ExcelFile(io.BytesIO(data))
+    wanted = sheets_for(name)
+    present = [sh for sh in wanted if sh in book.sheet_names]
+    if not present:
+        raise RuntimeError(f"none of the sheets {', '.join(wanted)} found (sheets: {', '.join(book.sheet_names[:10])})")
+    missing = [sh for sh in wanted if sh not in present]
+    if missing:
+        log.warning("BIM: %s has no sheet %s", name, ", ".join(missing))
     rows = []
-    for rec in df.to_dict("records"):
-        tag = normalize(rec[TAG_COLUMN])
-        if tag and tag != "NAN":
-            rows.append((tag, *[("" if pd.isna(rec.get(col)) else str(rec.get(col))) for col in DETAIL_COLUMNS.values()]))
+    for sheet in present:
+        df = _read_sheet(book, sheet)
+        df = df[df[TAG_COLUMN].notna()]
+        for rec in df.to_dict("records"):
+            tag = normalize(rec[TAG_COLUMN])
+            if tag and tag != "NAN":
+                details = [("" if pd.isna(rec.get(col)) else str(rec.get(col))) for col in DETAIL_COLUMNS.values()]
+                if len(present) > 1 and not details[list(DETAIL_COLUMNS).index("source_sheet")]:
+                    details[list(DETAIL_COLUMNS).index("source_sheet")] = sheet      # remember which sheet it came from
+                rows.append((tag, *details))
     return rows
 
 
@@ -314,7 +355,7 @@ def sync(force=False, progress=None):
                 try:
                     if progress:
                         progress(f"reading {f['name']}")
-                    rows = _read_tags(_local_read(f))
+                    rows = _read_tags(_local_read(f), f["name"])
                 except Exception as e:
                     errors.append(f"{f['name']}: {e}")
                     log.warning("BIM sync: %s failed: %s", f["name"], e)
@@ -487,7 +528,8 @@ def _as_of(lang):
 
 
 def _element_line(e):
-    parts = [e["bim_file"], e["discipline"], e["category"], e["family"]]
+    sheet = f"sheet {e['source_sheet']}" if e.get("source_sheet") else ""
+    parts = [e["bim_file"], sheet, e["discipline"], e["category"], e["family"]]
     return " | ".join(p for p in parts if p) + (f" | Status {e['status']}" if e.get("status") else "")
 
 

@@ -236,7 +236,8 @@ def _bim_line(elements, lang):
     if not elements:
         return _t(lang, "BIM: ไม่พบ", "BIM: not found")
     e = elements[0]
-    where = " | ".join(x for x in [e.get("bim_file"), e.get("discipline"), e.get("category"), e.get("family")] if x)
+    sheet = f"sheet {e['source_sheet']}" if e.get("source_sheet") else ""
+    where = " | ".join(x for x in [e.get("bim_file"), sheet, e.get("discipline"), e.get("category"), e.get("family")] if x)
     status = f" | Status {e['status']}" if e.get("status") else ""
     return _t(lang, f"BIM: พบ {len(elements)} elements", f"BIM: {len(elements)} elements") + f" | {where}{status}"
 

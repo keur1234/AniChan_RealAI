@@ -2,7 +2,7 @@
 """Update the BIM DB that Vicky searches.
 
 1. Download the BIM Excel files from the Google Drive folder into bim_files/ (only new or changed files)
-2. Read sheet Combined_25Digits, column OBK.FM_25Digits_TAG of each file into bim_index.db
+2. Read column OBK.FM_25Digits_TAG (sheet Combined_25Digits; CI_ files: sheets P01,P02,P03,P04,P06) into bim_index.db
 
 Run it whenever you like (the bot also does it every week if BIM_DRIVE_FOLDER is set in .env):
 
@@ -53,7 +53,8 @@ def main():
     if bim_index.DRIVE_FOLDER:
         print(f"Files  : {bim_index.DOWNLOAD_DIR}")
     print(f"DB     : {bim_index.DB_PATH}")
-    print(f"Reads  : sheet {bim_index.SHEET}, column {bim_index.TAG_COLUMN}\n")
+    rules = "".join(f"; {p}: sheets {', '.join(sh)}" for p, sh in bim_index.SHEET_RULES)
+    print(f"Reads  : column {bim_index.TAG_COLUMN}, sheet {bim_index.SHEET}{rules}\n")
 
     started = time.time()
     report = bim_index.sync(force=args.full, progress=lambda msg: print("  " + msg, flush=True))
