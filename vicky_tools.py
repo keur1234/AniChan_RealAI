@@ -114,6 +114,9 @@ SHEETS_SCHEMA = {
     },
 }
 
+FAS_PARAM = {"type": "boolean", "description": "True only when the user asks to check FAS (fire alarm): "
+                                            "CM-FIRE rows only, special cases counted as N/A กรณีพิเศษ"}
+
 FUNCTION_DECLARATIONS = [
     _decl("find_document_links",
           "Find the team's existing documents (e.g. Raw file summary, Final Validation summary) by name and send their links. "
@@ -154,12 +157,14 @@ FUNCTION_DECLARATIONS = [
           "Run the OBK validation program on the latest file sent in this chat. Only when the user asks to validate/check it. "
           "Returns the validation summary and download links to the result files. "
           "Set document_name to validate a team document instead.",
-          {"document_name": {"type": "string", "description": "Team document to use instead of the file sent in the chat (optional)"}}),
+          {"document_name": {"type": "string", "description": "Team document to use instead of the file sent in the chat (optional)"},
+           "fas": FAS_PARAM}),
     _decl("summarize_raw_data_file",
           "Validate the latest raw data file in this chat and create the standard OBK Excel summary table "
           "(by sheet, category, component, Incorrect TYPE C, duplicates). Use when the user asks for a summary table of the raw data file. "
           "Set document_name to use a team document instead.",
-          {"document_name": {"type": "string", "description": "Team document to use instead of the file sent in the chat (optional)"}}),
+          {"document_name": {"type": "string", "description": "Team document to use instead of the file sent in the chat (optional)"},
+           "fas": FAS_PARAM}),
 ]
 
 FUNCTION_TOOL = types.Tool(function_declarations=FUNCTION_DECLARATIONS)

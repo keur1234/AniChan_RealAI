@@ -139,6 +139,8 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - คำสั่งลัด: /bim ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /bim, /bimstatus ดูสถานะข้อมูล BIM
 - คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
   /docs เพื่อดูรายชื่อเอกสารของทีม
+- ตรวจ FAS: พิมพ์ /check FAS หรือ /summary FAS (หรือเรียก validate_raw_data_file / summarize_raw_data_file ด้วย fas=true เมื่อผู้ใช้ขอตรวจ FAS เท่านั้น)
+  จะตรวจเฉพาะ Asset ID ที่มี CM-FIRE และ asset ที่เข้ากฎพิเศษนับเป็น N/A กรณีพิเศษ แยกต่างหาก ไม่นำไปหาใน BIM
 
 ## ศัพท์ของโครงการ OBK (เมื่อพูดเรื่อง index codes ต้องใช้ให้ตรง)
 - ใช้คำว่า "index codes" ไม่ใช้ index name, Asset ID, รหัส หรือ รายการ แทน
@@ -185,6 +187,7 @@ SCRIPT_LANGUAGES = [
 
 def _words_only(text):
     text = re.sub(r"^/\S+", " ", text)                     # /check
+    text = FAS_RE.sub(" ", text)                              # /check FAS
     text = re.sub(r"https?://\S+|@\S+", " ", text)          # links, @mentions
     for code in obk_validator.find_codes(text) + bim_index.find_partials(text):    # codes say nothing about language
         text = text.replace(code, " ")
@@ -398,6 +401,8 @@ def run_tool(name, args, ctx):
             return {"summary": text, "_links": [file_link(ctx, token, path)]}
 
         if name in ("validate_raw_data_file", "summarize_raw_data_file"):
+            if args.get("fas"):
+                file_info = dict(file_info, _fas=True)
             file_name, result, token, error = validate_file_info(file_info, user_id)
             if error:
                 return {"error": error}
@@ -409,7 +414,7 @@ def run_tool(name, args, ctx):
                 paths = [obk_files.build_summary_workbook(result, file_name, lang)]
             else:
                 paths = [p for p in result.get("outputs", []) if not p.endswith(".png")]
-                bim_text, bim_path = bim_check_section(token, file_name)
+                bim_text, bim_path = bim_check_section(token, file_name, result)
                 if bim_text:
                     summary += "\n" + bim_text
                     paths.append(bim_path)
@@ -502,12 +507,25 @@ def remember(chat_id, user_text, reply):
     history.append(types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
 
 
+# "/check FAS" (or "/summary FAS"): FAS check with the special rules in fas_rules.py
+FAS_RE = re.compile(r"(?<![\w-])FAS(?![\w-])", re.IGNORECASE)
+
+
+def wants_fas(text):
+    return bool(FAS_RE.search(text or ""))
+
+
+def with_fas(file_info, text):
+    """The group file to validate, flagged for the FAS check if the command asked for it."""
+    return dict(file_info, _fas=True) if file_info and wants_fas(text) else file_info
+
+
 def extract_codes(text):
     """Returns (codes, is_check_command)."""
     lowered = text.lower()
     command = next((c for c in CHECK_COMMANDS if lowered.startswith(c)), None)
     if command:
-        body = text[len(command):]
+        body = FAS_RE.sub(" ", text[len(command):])
         codes = obk_validator.find_codes(body) or body.split()
         return codes[:MAX_CODES_PER_MESSAGE], True
     return obk_validator.find_codes(text)[:MAX_CODES_PER_MESSAGE], False
@@ -676,7 +694,7 @@ def validate_file_info(file_info, user_id):
                                          f"The file is larger than {mb} MB. Please split it and send it again.")
     try:
         data = file_info.get("_data") or download_line_content(file_info["id"])[0]
-        result, token = obk_files.validate_file(file_name, data)
+        result, token = obk_files.validate_file(file_name, data, fas=bool(file_info.get("_fas")))
     except Exception:
         log.exception("File validation failed")
         return file_name, None, None, tr(
@@ -703,14 +721,17 @@ def download_links(user_id, base_url, token, paths):
               f"\n\nDownload, links expire in {hours} hours\n") + "\n".join(links)
 
 
-def bim_check_section(token, file_name):
+def bim_check_section(token, file_name, result=None):
     """/check extra: the validated file against the BIM DB. Returns (text, xlsx path) or ("", None) if no BIM data."""
     if not bim_index.ready():
         return "", None
     job_dir = os.path.join(obk_files.WORK_ROOT, token)
+    only = None
+    if result and result.get("fas"):  # FAS check: CM-FIRE codes only, special cases are not looked up
+        only = set(result.get("checked_codes", [])) - set(result.get("fas_special_codes", []))
     try:
         _, path, stats = bim_index.compare_file(os.path.join(job_dir, obk_files.safe_name(file_name)), file_name,
-                                                os.path.join(job_dir, "out"), "en", with_stats=True)
+                                                os.path.join(job_dir, "out"), "en", with_stats=True, only=only)
     except Exception:
         log.exception("BIM check failed")
         return "", None
@@ -741,7 +762,7 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
     extra = []
     if not result.get("skipped"):
         outputs = list(result.get("outputs", []))
-        bim_text, bim_path = bim_check_section(token, file_name)
+        bim_text, bim_path = bim_check_section(token, file_name, result)
         if bim_text:
             summary += "\n" + bim_text
             outputs.append(bim_path)
@@ -763,7 +784,8 @@ def handle_summary(event, chat_id, user_id, base_url, mention_user_id=None):
     def send_reply(token, to, text, extra=()):
         _send_reply(token, to, text, extra, mention_user_id=mention_user_id)
 
-    file_info = find_group_file(chat_id, user_id, event["message"].get("quotedMessageId"))
+    file_info = with_fas(find_group_file(chat_id, user_id, event["message"].get("quotedMessageId")),
+                         event["message"].get("text", ""))
     if not file_info:
         send_reply(event["replyToken"], chat_id, tr(
             user_id,
@@ -902,7 +924,7 @@ def handle_group_event(event, chat_id, user_id, base_url):
     if check_command:
         if codes:
             return handle_text(event, chat_id, user_id, text, mention_user_id=user_id)
-        file_info = find_group_file(chat_id, user_id, message.get("quotedMessageId"))
+        file_info = with_fas(find_group_file(chat_id, user_id, message.get("quotedMessageId")), text)
         if file_info:
             return handle_file(event, chat_id, user_id, base_url, message=file_info, mention_user_id=user_id)
         send_reply(reply_token, chat_id,
@@ -1053,7 +1075,7 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             return
         codes = []
     if check_command and not codes:
-        file_info = find_group_file(chat_id, user_id, event.get("message", {}).get("quotedMessageId"))
+        file_info = with_fas(find_group_file(chat_id, user_id, event.get("message", {}).get("quotedMessageId")), text)
         if file_info:
             return handle_file(event, chat_id, user_id, event.get("_base_url", ""), message=file_info,
                                mention_user_id=mention_user_id)

@@ -65,7 +65,7 @@ def get_download(token, file_name):
     return None
 
 
-def validate_file(file_name, data):
+def validate_file(file_name, data, fas=False):
     """Run the original file pipeline. Returns (result dict, token for downloads)."""
     # Imported lazily so the chat bot still starts if pandas isn't installed
     import validate_index_code as vic
@@ -78,7 +78,7 @@ def validate_file(file_name, data):
     with open(path, 'wb') as f:
         f.write(data)
 
-    result = vic.process_file(path, obk_validator.get_master(), os.path.join(job_dir, "out"), room=True, dup_mode='sheet')
+    result = vic.process_file(path, obk_validator.get_master(), os.path.join(job_dir, "out"), room=True, dup_mode='sheet', fas=fas)
     _add_bim_column(result)
     return result, token
 
@@ -91,7 +91,7 @@ def _add_bim_column(result):
     for p in result.get('outputs', []):
         if p.endswith('.xlsx'):
             try:
-                bim_index.add_found_column(p)
+                bim_index.add_found_column(p, skip=result.get('fas_special_codes', ()))
             except Exception:
                 logging.getLogger(__name__).exception("Adding Found in BIM to %s failed", p)
 
@@ -100,6 +100,7 @@ SKIP_REASONS_EN = {
     'ไฟล์ว่าง': 'the file is empty',
     'ไม่พบคอลัมน์ Asset ID': 'no index code column was found',
     'ไม่มี Asset ID ที่ใช้ได้': 'no usable index codes were found',
+    'ไม่มี Asset ID CM-FIRE': 'no CM-FIRE index codes were found (FAS check)',
 }
 
 
@@ -127,7 +128,11 @@ def format_summary(result, file_name, lang='th'):
     return "\n".join(lines)
 
 
-TYPE_COLUMNS = ['TYPE A', 'TYPE B', 'TYPE B OR C', 'TYPE C', 'N/A']
+TYPE_COLUMNS = ['TYPE A', 'TYPE B', 'TYPE B OR C', 'TYPE C', 'N/A', 'N/A กรณีพิเศษ']
+
+
+def fas_special_label(lang):
+    return 'N/A กรณีพิเศษ' if lang == 'th' else 'N/A special case'
 
 
 def _reason_display(text, lang):
@@ -152,7 +157,7 @@ def build_summary_workbook(result, file_name, lang='th'):
     from openpyxl.utils import get_column_letter
 
     main_path = next(p for p in result['outputs'] if p.endswith('_output.xlsx'))
-    df = pd.read_excel(main_path, sheet_name='Sheet1')
+    df = pd.read_excel(main_path, sheet_name='Sheet1', keep_default_na=False, na_values=[''])  # keep "N/A" as text
     total = len(df)
     type_counts = df['TYPE'].value_counts()
     dup = df[df['Dup Count'].fillna(0) > 1].drop_duplicates('Asset ID')
@@ -186,8 +191,11 @@ def build_summary_workbook(result, file_name, lang='th'):
         duplicates['Found in BIM'] = df.loc[duplicates.index, 'Found in BIM'].values
         unique_codes = df.drop_duplicates('Asset ID')
         found = int((unique_codes['Found in BIM'] == 'Yes').sum())
-        summary_rows += [['Unique index codes', len(unique_codes)],
-                         ['Found in BIM', found], ['Not in BIM', len(unique_codes) - found]]
+        missing = int((unique_codes['Found in BIM'] == 'No').sum())
+        summary_rows += [['Unique index codes', len(unique_codes)], ['Found in BIM', found], ['Not in BIM', missing]]
+    if result.get('fas'):
+        summary_rows.insert(1, ['FAS check', 'only Asset IDs containing CM-FIRE'])
+        summary_rows.append([fas_special_label(lang), len(result.get('fas_special_codes', []))])
 
     sheets = [
         ('By Sheet', _pivot(df, 'Source Sheet')),
@@ -253,7 +261,9 @@ def format_check_summary(result, file_name, lang='th'):
     total = result['records']
     pct = lambda n: f"{(n / total * 100 if total else 0):.2f}%"
     bfv, qlt = result['BFV_correct_format']['count'], result['QLT_type_a']['count']
-    lines = [
+    lines = ["FAS check: เฉพาะ Asset ID ที่มี CM-FIRE" if lang == 'th' else "FAS check: only Asset IDs containing CM-FIRE"] \
+        if result.get('fas') else []
+    lines += [
         f"ใช้คอลัมน์: '{result['column_used']}'",
         f"df หลัง filter: {total} rows",
         "---- Review DataFrame Summary ----",
@@ -265,4 +275,6 @@ def format_check_summary(result, file_name, lang='th'):
     for typ, v in result['types'].items():
         lines.append(f"    {typ:<11} : {v['count']} ({pct(v['count'])})")
     lines.append(f"DUP (Asset ID ซ้ำ, mode={result.get('dup_mode', 'sheet')})     : {result['duplicates']}")
+    if result.get('fas'):
+        lines.append(f"{fas_special_label(lang)} (unique) : {len(result.get('fas_special_codes', []))}")
     return "\n".join(lines)

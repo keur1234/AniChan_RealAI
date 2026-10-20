@@ -25,6 +25,8 @@ import argparse, json, os, re, sys
 from collections import Counter
 import pandas as pd
 
+import fas_rules
+
 # ================= CONFIG (เหมือนสคริปต์เดิม) =================
 CANDIDATE_COLUMNS = [
     'Name', 'IndexCode', 'Index code', 'Asset ID', 'AssetID',
@@ -325,17 +327,18 @@ def save_pie(df, title, path):
     except ImportError:
         return None
     vc = df['TYPE'].value_counts()
-    cmap = {'TYPE A': 'green', 'TYPE B': 'gray', 'TYPE C': 'red', 'TYPE B OR C': 'yellow'}
+    cmap = {'TYPE A': 'green', 'TYPE B': 'gray', 'TYPE C': 'red', 'TYPE B OR C': 'yellow', fas_rules.SPECIAL_TYPE: 'orange'}
     fig, ax = plt.subplots(figsize=(8, 8))
     w, _, _ = ax.pie(vc, colors=[cmap.get(t, 'lightblue') for t in vc.index], explode=[0.05] * len(vc),
                      autopct=lambda p: f"{int(round(p / 100 * vc.sum()))} ({p:.1f}%)", startangle=45,
                      textprops={'fontsize': 12}, wedgeprops={'edgecolor': 'white'})
-    ax.legend(w, vc.index, title="TYPE", loc="center left", bbox_to_anchor=(1, 0.5))
+    labels = ['N/A Special case' if t == fas_rules.SPECIAL_TYPE else t for t in vc.index]  # chart fonts may lack Thai
+    ax.legend(w, labels, title="TYPE", loc="center left", bbox_to_anchor=(1, 0.5))
     ax.set_title(title, fontsize=14); ax.axis('equal'); plt.tight_layout(); plt.savefig(path); plt.close()
     return path
 
 # ================= PIPELINE =================
-def process_file(path, md, out_root, room=True, dup_mode='sheet'):
+def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False):
     log = []
     name = os.path.splitext(os.path.basename(path))[0]
     df_all = read_input(path, log)
@@ -350,8 +353,10 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet'):
     # ตัด _point ท้าย Asset ID
     df['Asset ID'] = df[col].astype(str).apply(lambda x: x if '_' not in x else '_'.join(x.split('_')[:-1]))
     df = df[(df['Asset ID'] != '') & (df['Asset ID'] != 'nan') & (df['Asset ID'].str.strip() != '')].copy()
+    if fas:  # FAS check: only CM-FIRE rows (see fas_rules.py)
+        df = df[df['Asset ID'].map(fas_rules.keep_row)].copy()
     if df.empty:
-        return {'file': path, 'skipped': 'ไม่มี Asset ID ที่ใช้ได้', 'log': log}
+        return {'file': path, 'skipped': 'ไม่มี Asset ID CM-FIRE' if fas else 'ไม่มี Asset ID ที่ใช้ได้', 'log': log}
 
     # ตรวจจาก unique Asset ID แล้ว map กลับทุกแถว (get_results point=True)
     uniq = list(dict.fromkeys(df['Asset ID']))
@@ -368,6 +373,13 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet'):
     review['Asset Type'] = review['Asset ID'].apply(get_equipment)
     review['Approved'] = review['Asset Type'].apply(lambda x: 'yes' if x in md['approved'] else 'no')
     review['TYPE'] = [apply_override(a, t) for a, t in zip(review['Asset ID'], review['TYPE'])]
+    special = pd.Series(False, index=review.index)
+    if fas:  # FAS special cases: TYPE "N/A กรณีพิเศษ", counted separately, not looked up in BIM
+        special = pd.Series([fas_rules.is_special(a, t) for a, t in zip(review['Asset ID'], review['Asset Type'])],
+                            index=review.index)
+        review.loc[special, 'TYPE'] = fas_rules.SPECIAL_TYPE
+        review.loc[special, 'validation_result'] = 'FAS special case'
+        review.loc[special, 'validation_result_thai'] = fas_rules.SPECIAL_TYPE
 
     # Source Sheet = ชีทแรกที่พบ asset (เหมือน merge source_map เดิม)
     src = df[['Asset ID', 'Source Sheet']].drop_duplicates(subset='Asset ID', keep='first')
@@ -422,6 +434,9 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet'):
         'worst_sheets': worst[['Source Sheet', 'TYPE A %', 'TOTAL']].to_dict('records'),
         'sample_failures': asset[~asset['TYPE'].isin(['TYPE A', 'N/A'])][['Asset ID', 'TYPE', 'validation_result', 'validation_result_thai']].head(10).to_dict('records'),
         'outputs': [p for p in [p1, p2, png] if p],
+        'fas': fas,
+        'fas_special_codes': sorted(set(review.loc[review['TYPE'] == fas_rules.SPECIAL_TYPE, 'Asset ID'])),
+        'checked_codes': list(asset['Asset ID']),
     }
 
 def main():

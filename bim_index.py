@@ -497,8 +497,9 @@ def count_by_tag(codes):
         con.close()
 
 
-def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="Asset ID"):
-    """Append a "Found in BIM" (Yes/No) column to the given sheets of a validation output workbook."""
+def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="Asset ID", skip=()):
+    """Append a "Found in BIM" (Yes/No) column to the given sheets of a validation output workbook.
+    Codes in `skip` (FAS special cases) get "N/A กรณีพิเศษ" and are not looked up."""
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
 
@@ -514,8 +515,9 @@ def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="As
         targets.append((ws, headers.index(code_header) + 1))
     if not targets:
         return False
+    skip = {normalize(c) for c in skip}
     codes = {normalize(ws.cell(r, col).value) for ws, col in targets for r in range(2, ws.max_row + 1)
-             if ws.cell(r, col).value is not None}
+             if ws.cell(r, col).value is not None} - skip
     counts = count_by_tag(codes)
     for ws, col in targets:
         new = ws.max_column + 1
@@ -526,7 +528,8 @@ def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="As
         for r in range(2, ws.max_row + 1):
             value = ws.cell(r, col).value
             if value is not None:
-                ws.cell(r, new, "Yes" if counts.get(normalize(value)) else "No")
+                code = normalize(value)
+                ws.cell(r, new, "N/A กรณีพิเศษ" if code in skip else "Yes" if counts.get(code) else "No")
         ws.column_dimensions[get_column_letter(new)].width = 14
         if ws.auto_filter.ref:
             ws.auto_filter.ref = ws.dimensions
@@ -620,8 +623,9 @@ def _tags_with_components(components):
         con.close()
 
 
-def compare_file(path, file_name, out_dir, lang="th", with_stats=False):
-    """Check every index code of a file against BIM. Returns (reply text, xlsx path or None[, stats])."""
+def compare_file(path, file_name, out_dir, lang="th", with_stats=False, only=None):
+    """Check every index code of a file against BIM. Returns (reply text, xlsx path or None[, stats]).
+    `only`: check just these codes (e.g. FAS check: CM-FIRE codes without the special cases)."""
     import pandas as pd
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -631,6 +635,9 @@ def compare_file(path, file_name, out_dir, lang="th", with_stats=False):
         msg = _t(lang, f"หนูไม่พบคอลัมน์ index codes ในไฟล์ {file_name} ค่ะ",
                  f"I couldn't find an index codes column in {file_name}.")
         return (msg, None, None) if with_stats else (msg, None)
+    if only is not None:
+        only = {normalize(c) for c in only}
+        codes_df = codes_df[codes_df["index codes"].isin(only)]
 
     unique = list(dict.fromkeys(codes_df["index codes"]))
     details = lookup(unique, per_code=1)
