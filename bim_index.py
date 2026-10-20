@@ -605,8 +605,8 @@ def _codes_from_file(path):
     if col is None:
         return None, None
     df = df.dropna(subset=[col])
-    codes = df[col].astype(str).map(lambda x: x if "_" not in x else "_".join(x.split("_")[:-1])).map(normalize)
-    out = df.assign(**{"index codes": codes})[["index codes", "Source Sheet"]]
+    raw = df[col].astype(str).map(lambda x: x if "_" not in x else "_".join(x.split("_")[:-1]))
+    out = df.assign(**{"index codes": raw.map(normalize), "raw": raw})[["index codes", "raw", "Source Sheet"]]
     return out[(out["index codes"] != "") & (out["index codes"] != "NAN")], str(col)
 
 
@@ -623,66 +623,102 @@ def _tags_with_components(components):
         con.close()
 
 
-def compare_file(path, file_name, out_dir, lang="th", with_stats=False, only=None):
-    """Check every index code of a file against BIM. Returns (reply text, xlsx path or None[, stats]).
-    `only`: check just these codes (e.g. FAS check: CM-FIRE codes without the special cases)."""
+def _tag_counts_with_components(components):
+    """{tag: number of BIM elements} for every tag of these components."""
+    if not os.path.exists(DB_PATH) or not components:
+        return {}
+    con = _connect()
+    try:
+        out = {}
+        for comp in components:
+            out.update(con.execute("SELECT tag, COUNT(*) FROM elements WHERE tag LIKE ? GROUP BY tag", (f"{comp}-%",)))
+        return out
+    finally:
+        con.close()
+
+
+def _validate_codes(codes):
+    """{code: (TYPE, validation_result)} with the same validation as /check (rule 9 counted over these codes)."""
+    import obk_validator
+    import validate_index_code as vic
+    md = obk_validator.get_master()
+    uniq = list(dict.fromkeys(codes))
+    if md is None:
+        return {c: ("", "") for c in uniq}
+    rc = vic.count_running_keys(uniq, room=True)
+    out = {}
+    for c in uniq:
+        en, _, typ, _ = vic.validate_index_code(c, md, rc, True)
+        out[c] = (vic.apply_override(c, typ), en)
+    return out
+
+
+def _report_frame(codes, validated, fas):
+    """Rows for compare_asset_id.py: Asset ID, TYPE, validation_result (+ NEW TYPE = N/A for FAS special cases)."""
     import pandas as pd
-    from openpyxl.styles import Font, PatternFill
-    from openpyxl.utils import get_column_letter
+    import validate_index_code as vic
+    import fas_rules
+    rows = []
+    for raw, code in codes:
+        typ, result = validated[raw]
+        row = {"Asset ID": code, "TYPE": typ, "validation_result": result}
+        if fas:
+            row["NEW TYPE"] = "N/A" if fas_rules.is_special(raw, vic.get_equipment(raw)) else ""
+        rows.append(row)
+    columns = ["Asset ID", "TYPE"] + (["NEW TYPE"] if fas else []) + ["validation_result"]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _write_report(sub, bim, sub_name, bim_name, path_out):
+    """The Asset ID Comparison Report (compare_asset_id.py, unchanged) for these two lists."""
+    import contextlib
+    import shutil
+    import tempfile
+    import compare_asset_id
+    tmp = tempfile.mkdtemp(prefix="bim_report_")
+    try:
+        sub_path, bim_path = os.path.join(tmp, sub_name), os.path.join(tmp, bim_name)
+        sub.to_excel(sub_path, index=False)
+        bim.to_excel(bim_path, index=False)
+        with contextlib.redirect_stdout(io.StringIO()):     # it prints a console summary
+            compare_asset_id.compare_asset_id(sub_path, bim_path, path_out)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def compare_file(path, file_name, out_dir, lang="th", with_stats=False, fas=False):
+    """Check every index code of a file against BIM. Returns (reply text, xlsx path or None[, stats]).
+    fas: FAS check, only CM-FIRE codes; FAS special cases (N/A กรณีพิเศษ) are not looked up in BIM."""
+    import fas_rules
 
     codes_df, col = _codes_from_file(path)
+    if codes_df is not None and fas:
+        codes_df = codes_df[codes_df["index codes"].map(fas_rules.keep_row)]
     if codes_df is None or codes_df.empty:
         msg = _t(lang, f"หนูไม่พบคอลัมน์ index codes ในไฟล์ {file_name} ค่ะ",
                  f"I couldn't find an index codes column in {file_name}.")
         return (msg, None, None) if with_stats else (msg, None)
-    if only is not None:
-        only = {normalize(c) for c in only}
-        codes_df = codes_df[codes_df["index codes"].isin(only)]
 
-    unique = list(dict.fromkeys(codes_df["index codes"]))
-    details = lookup(unique, per_code=1)
+    sub = _report_frame(zip(codes_df["raw"], codes_df["index codes"]), _validate_codes(codes_df["raw"]), fas)
+    special = set(sub.loc[sub.get("NEW TYPE", "") == "N/A", "Asset ID"]) if fas else set()
+    unique = [c for c in dict.fromkeys(codes_df["index codes"]) if c not in special]
     counts = count_by_tag(unique)
-    codes_df = codes_df.assign(**{
-        "Found in BIM": codes_df["index codes"].map(lambda c: "Yes" if counts.get(c) else "No"),
-        "BIM elements": codes_df["index codes"].map(lambda c: counts.get(c, 0)),
-        "BIM file": codes_df["index codes"].map(lambda c: details[c][0]["bim_file"] if details.get(c) else ""),
-        "Discipline": codes_df["index codes"].map(lambda c: details[c][0]["discipline"] if details.get(c) else ""),
-        "Category": codes_df["index codes"].map(lambda c: details[c][0]["category"] if details.get(c) else ""),
-        "Family": codes_df["index codes"].map(lambda c: details[c][0]["family"] if details.get(c) else ""),
-        "BIM Status": codes_df["index codes"].map(lambda c: details[c][0]["status"] if details.get(c) else ""),
-    })
     total = len(unique)
     found = sum(1 for c in unique if counts.get(c))
     missing = [c for c in unique if not counts.get(c)]
     components = {c.split("-")[0] for c in unique if "-" in c}
-    only_in_bim = sorted(_tags_with_components(components) - set(unique))
+    bim_tags = _tag_counts_with_components(components)
+    if fas:
+        bim_tags = {t: n for t, n in bim_tags.items() if fas_rules.keep_row(t)}
+    bim_rows = [(t, t) for t, n in sorted(bim_tags.items()) for _ in range(n)]     # one row per BIM element
+    bim = _report_frame(bim_rows, _validate_codes(bim_tags), fas)
+    only_in_bim = sorted(set(bim_tags) - set(unique) - special)
 
     stem = os.path.splitext(os.path.basename(file_name))[0]
     path_out = os.path.join(out_dir, f"{stem}_BIM_check.xlsx")
-    summary = pd.DataFrame([
-        ["File", file_name], ["Column checked", col], ["BIM data as of", last_sync() or "-"],
-        ["Total index codes", total], ["Found in BIM", found], ["Found in BIM %", found / total if total else 0],
-        ["Not in BIM", len(missing)], ["In BIM but not in file", len(only_in_bim)],
-        ["Components compared", ", ".join(sorted(components))],
-    ])
-    sheets = [("BIM Check", codes_df), ("Not in BIM", pd.DataFrame({"index codes": missing})),
-              ("In BIM not in file", pd.DataFrame({"index codes": only_in_bim}))]
-    header_font, header_fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="1F4E78")
-    with pd.ExcelWriter(path_out, engine="openpyxl") as w:
-        summary.to_excel(w, sheet_name="Summary", index=False, header=False)
-        w.sheets["Summary"]["B6"].number_format = "0.00%"
-        for name, data in sheets:
-            data.to_excel(w, sheet_name=name, index=False)
-            ws = w.sheets[name]
-            ws.freeze_panes = "A2"
-            if data.shape[1] and len(data):
-                ws.auto_filter.ref = ws.dimensions
-            for cell in ws[1]:
-                cell.font, cell.fill = header_font, header_fill
-        for ws in w.book.worksheets:
-            for column in ws.columns:
-                width = max((len(str(c.value)) for c in column if c.value is not None), default=8)
-                ws.column_dimensions[get_column_letter(column[0].column)].width = min(max(width + 2, 10), 60)
+    as_of = (last_sync() or "").split(" ")[0].replace("-", "")
+    _write_report(sub, bim, os.path.basename(file_name) if file_name.lower().endswith(".xlsx") else f"{stem}.xlsx",
+                  f"BIM_DB_{as_of or 'latest'}.xlsx", path_out)
 
     lines = [_t(lang, "ผลเทียบ index codes กับ BIM", "Index codes vs BIM"), _t(lang, "ไฟล์: ", "File: ") + file_name,
              _as_of(lang),

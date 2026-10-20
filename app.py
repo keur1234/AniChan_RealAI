@@ -754,12 +754,10 @@ def bim_check_section(token, file_name, result=None):
     if not bim_index.ready():
         return "", None
     job_dir = os.path.join(obk_files.WORK_ROOT, token)
-    only = None
-    if result and result.get("fas"):  # FAS check: CM-FIRE codes only, special cases are not looked up
-        only = set(result.get("checked_codes", [])) - set(result.get("fas_special_codes", []))
     try:
         _, path, stats = bim_index.compare_file(os.path.join(job_dir, obk_files.safe_name(file_name)), file_name,
-                                                os.path.join(job_dir, "out"), "en", with_stats=True, only=only)
+                                                os.path.join(job_dir, "out"), "en", with_stats=True,
+                                                fas=bool(result and result.get("fas")))
     except Exception:
         log.exception("BIM check failed")
         return "", None
