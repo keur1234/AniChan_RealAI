@@ -498,6 +498,7 @@ def fetch_document(name):
 
 
 def file_link(ctx, token, path):
+    obk_files.archive(token, [path])
     name = os.path.basename(path)
     return f"- {name}\n{ctx.get('base_url', '')}/files/{token}/{quote(name)}"
 
@@ -740,6 +741,7 @@ def validate_line_file(event, chat_id, user_id, message, send_reply):
 
 
 def download_links(user_id, base_url, token, paths):
+    obk_files.archive(token, paths)
     hours = obk_files.DOWNLOAD_TTL_SECONDS // 3600
     links = [f"- {os.path.basename(p)}\n{base_url}/files/{token}/{quote(os.path.basename(p))}" for p in paths]
     return tr(user_id, f"\n\nดาวน์โหลดไฟล์ ลิงก์มีอายุ {hours} ชั่วโมง\n",
@@ -791,6 +793,7 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
         if bim_text:
             summary += "\n" + bim_text
             outputs.append(bim_path)
+        obk_files.archive(token, [p for p in outputs if p.endswith(".png")])
         for path in outputs:
             if path.endswith(".png"):
                 url = f"{base_url}/files/{token}/{quote(os.path.basename(path))}"

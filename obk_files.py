@@ -6,7 +6,9 @@ import re
 import secrets
 import shutil
 import tempfile
+import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import obk_validator
 
@@ -14,6 +16,11 @@ ALLOWED_EXTENSIONS = ('.xlsx', '.xlsm', '.xls', '.csv')
 MAX_FILE_BYTES = int(os.getenv("OBK_MAX_FILE_MB", "20")) * 1024 * 1024
 DOWNLOAD_TTL_SECONDS = int(os.getenv("OBK_DOWNLOAD_TTL_HOURS", "24")) * 3600
 WORK_ROOT = os.path.join(tempfile.gettempdir(), "anichan_obk")
+# Permanent copies of every result file (empty = keep nothing after the TTL); relative paths are under the project folder
+RESULTS_DIR = os.getenv("OBK_RESULTS_DIR", "").strip()
+if RESULTS_DIR and not os.path.isabs(RESULTS_DIR):
+    RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), RESULTS_DIR)
+BANGKOK = timezone(timedelta(hours=7))
 
 # Thai fonts to fall back to for Thai file/sheet names in the pie chart (Windows, Linux, macOS)
 THAI_FONTS = ['Leelawadee UI', 'Leelawadee', 'Tahoma', 'Loma', 'Garuda', 'Noto Sans Thai', 'Thonburi']
@@ -245,6 +252,36 @@ def build_summary_workbook(result, file_name, lang='th', sender=None):
                 width = max((len(str(c.value)) for c in col if c.value is not None), default=8)
                 ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(width + 2, 10), 60)
     return path
+
+
+_archive_dirs = {}          # token -> its folder under RESULTS_DIR
+_archive_lock = threading.Lock()
+
+
+def archive(token, paths):
+    """Copy a job's result files (and the file that was sent in) to RESULTS_DIR/<date>/<time>_<file>/."""
+    if not RESULTS_DIR or not paths:
+        return
+    job_dir = os.path.join(WORK_ROOT, token)
+    try:
+        with _archive_lock:
+            folder = _archive_dirs.get(token)
+            if not folder:
+                inputs = [f for f in os.listdir(job_dir) if os.path.isfile(os.path.join(job_dir, f))]
+                stem = os.path.splitext(inputs[0] if inputs else os.path.basename(paths[0]))[0][:60]
+                now = datetime.now(BANGKOK)
+                folder = os.path.join(RESULTS_DIR, now.strftime("%Y-%m-%d"), f"{now:%H%M%S}_{stem}")
+                if os.path.exists(folder):
+                    folder += f"_{token[:6]}"
+                os.makedirs(folder, exist_ok=True)
+                for f in inputs:
+                    shutil.copy2(os.path.join(job_dir, f), folder)
+                _archive_dirs[token] = folder
+        for p in paths:
+            if os.path.isfile(p):
+                shutil.copy2(p, folder)
+    except OSError:
+        logging.getLogger(__name__).exception("Could not copy results to %s", RESULTS_DIR)
 
 
 def new_job():
