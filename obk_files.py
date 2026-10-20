@@ -1,5 +1,6 @@
 """Validate Excel/CSV files sent in LINE and keep the outputs downloadable for a while."""
 import logging
+from collections import Counter
 import os
 import re
 import secrets
@@ -104,7 +105,7 @@ SKIP_REASONS_EN = {
 }
 
 
-def format_summary(result, file_name, lang='th'):
+def format_summary(result, file_name, lang='th', sender=None):
     """File summary in the agreed OBK format: total, Incorrect, Validation result."""
     t = lambda th, en: obk_validator._t(lang, th, en)
     if result.get('skipped'):
@@ -121,7 +122,7 @@ def format_summary(result, file_name, lang='th'):
         return "\n".join(msg)
 
     type_counts = {typ: v['count'] for typ, v in result['types'].items()}
-    lines = [t("ผล validation index codes", "Index codes validation result"), t("ไฟล์: ", "File: ") + file_name]
+    lines = [t("ผล validation index codes", "Index codes validation result")] + source_lines(result, file_name, lang, sender)
     dup_lines = [t(f"  {code} ซ้ำ {n} ครั้ง", f"  {code} appears {n} times") for code, n in result.get('duplicate_codes', [])]
     lines += obk_validator.summary_lines(result['records'], result.get('duplicate_codes_total', 0), dup_lines,
                                          type_counts.get('TYPE B', 0), type_counts, result.get('type_c_codes', []), lang)
@@ -150,7 +151,7 @@ def _pivot(df, by):
     return table.reset_index().rename(columns={by: by if by != 'Asset Category Full name' else 'Asset Category'})
 
 
-def build_summary_workbook(result, file_name, lang='th'):
+def build_summary_workbook(result, file_name, lang='th', sender=None):
     """Excel summary table of a validated raw data file. Returns its path (next to the other outputs)."""
     import pandas as pd
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -163,8 +164,9 @@ def build_summary_workbook(result, file_name, lang='th'):
     dup = df[df['Dup Count'].fillna(0) > 1].drop_duplicates('Asset ID')
     reason_col = 'validation_result_thai' if lang == 'th' else 'validation_result'
 
-    summary_rows = [
-        ['File', file_name],
+    summary_rows = [['File', file_name]] + ([['Sent by', sender]] if sender else []) + [
+        ['Components', ', '.join(f"{k or 'invalid format'} ({n:,})" for k, n in result.get('components', Counter()).most_common())],
+        ['Sub Systems', ', '.join(f"{k or 'invalid format'} ({n:,})" for k, n in result.get('subsystems', Counter()).most_common())],
         ['Total index codes', total],
         ['Incorrect - TYPE C', int(type_counts.get('TYPE C', 0))],
         ['Incorrect - duplicate index codes', len(dup)],
@@ -194,7 +196,7 @@ def build_summary_workbook(result, file_name, lang='th'):
         missing = int((unique_codes['Found in BIM'] == 'No').sum())
         summary_rows += [['Unique index codes', len(unique_codes)], ['Found in BIM', found], ['Not in BIM', missing]]
     if result.get('fas'):
-        summary_rows.insert(1, ['FAS check', 'only Asset IDs containing CM-FIRE'])
+        summary_rows.insert(1, ['FAS check', 'only index codes containing CM-FIRE'])
         summary_rows.append([fas_special_label(lang), len(result.get('fas_special_codes', []))])
 
     sheets = [
@@ -254,27 +256,62 @@ def new_job():
     return token, out_dir
 
 
-def format_check_summary(result, file_name, lang='th'):
-    """/check reply for a file: the same console summary the original indexcode_validation.py prints."""
+MAX_COMPONENTS_LISTED = 20
+MAX_SUBSYSTEMS_LISTED = 15
+
+
+def _counts_line(label, counter, limit, lang):
+    """'Components (2): CUP 1,200 | P02 613', the largest first."""
+    invalid = counter.get('', 0)
+    items = [(k, n) for k, n in counter.most_common() if k]
+    text = f"{label} ({len(items)}): " + " | ".join(f"{k} {n:,}" for k, n in items[:limit])
+    if len(items) > limit:
+        more = len(items) - limit
+        text += obk_validator._t(lang, f" และอื่นๆ อีก {more} {label}", f" and {more} more")
+    if invalid:
+        text += obk_validator._t(lang, f" | รูปแบบไม่ถูกต้อง {invalid:,}", f" | invalid format {invalid:,}")
+    return text
+
+
+def source_lines(result, file_name, lang='th', sender=None):
+    """Where the index codes come from: file, who sent it, column, components and sub systems."""
+    t = lambda th, en: obk_validator._t(lang, th, en)
+    lines = [t("ไฟล์: ", "File: ") + file_name]
+    if sender:
+        lines.append(t("ส่งโดย: ", "Sent by: ") + sender)
+    lines.append(t("คอลัมน์ที่ใช้: ", "Column used: ") + str(result.get('column_used', '')))
+    if result.get('fas'):
+        lines.append(t("FAS check: ตรวจเฉพาะ index codes ที่มี CM-FIRE", "FAS check: only index codes containing CM-FIRE"))
+    if result.get('components'):
+        lines.append(_counts_line("Components", result['components'], MAX_COMPONENTS_LISTED, lang))
+    if result.get('subsystems'):
+        lines.append(_counts_line("Sub Systems", result['subsystems'], MAX_SUBSYSTEMS_LISTED, lang))
+    return lines
+
+
+def format_check_summary(result, file_name, lang='th', sender=None):
+    """/check reply for a file: where the index codes come from, then the validation figures."""
     if result.get('skipped'):
         return format_summary(result, file_name, lang)
-    total = result['records']
+    t = lambda th, en: obk_validator._t(lang, th, en)
+    total, unique = result['records'], result.get('unique_assets', result['records'])
     pct = lambda n: f"{(n / total * 100 if total else 0):.2f}%"
     bfv, qlt = result['BFV_correct_format']['count'], result['QLT_type_a']['count']
-    lines = ["FAS check: เฉพาะ Asset ID ที่มี CM-FIRE" if lang == 'th' else "FAS check: only Asset IDs containing CM-FIRE"] \
-        if result.get('fas') else []
+    lines = source_lines(result, file_name, lang, sender)
     lines += [
-        f"ใช้คอลัมน์: '{result['column_used']}'",
-        f"df หลัง filter: {total} rows",
-        "---- Review DataFrame Summary ----",
-        f"Total Records : {total}",
-        f"BFV (Correct BIM Format = TRUE) : {bfv} ({pct(bfv)})",
-        f"QLT (TYPE = TYPE A)             : {qlt} ({pct(qlt)})",
+        t(f"index codes ทั้งหมด: {total:,} index codes (ไม่ซ้ำ {unique:,} index codes)",
+          f"Index codes: {total:,} (unique {unique:,})"),
+        "---- Validation Summary ----",
+        f"BFV (Correct BIM Format) : {bfv:,} index codes ({pct(bfv)})",
+        f"QLT (TYPE A)             : {qlt:,} index codes ({pct(qlt)})",
         "  -- TYPE breakdown --",
     ]
     for typ, v in result['types'].items():
-        lines.append(f"    {typ:<11} : {v['count']} ({pct(v['count'])})")
-    lines.append(f"DUP (Asset ID ซ้ำ, mode={result.get('dup_mode', 'sheet')})     : {result['duplicates']}")
+        lines.append(f"    {typ:<11} : {v['count']:,} ({pct(v['count'])})")
+    lines.append(t(f"index codes ซ้ำ (พบมากกว่า 1 ชีท) : {result['duplicates']:,} index codes",
+                   f"Duplicate index codes (in more than 1 sheet) : {result['duplicates']:,}"))
     if result.get('fas'):
-        lines.append(f"{fas_special_label(lang)} (unique) : {len(result.get('fas_special_codes', []))}")
+        n = len(result.get('fas_special_codes', []))
+        lines.append(obk_validator._t(lang, f"{fas_special_label(lang)} (ไม่ซ้ำ) : {n:,} index codes",
+                                      f"{fas_special_label(lang)} (unique) : {n:,}"))
     return "\n".join(lines)

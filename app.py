@@ -406,12 +406,13 @@ def run_tool(name, args, ctx):
             file_name, result, token, error = validate_file_info(file_info, user_id)
             if error:
                 return {"error": error}
+            sender = sender_name(file_info) if not args.get("document_name") else ("เอกสารของทีม" if lang == "th" else "Team document")
             summary = (obk_files.format_check_summary if name == "validate_raw_data_file" else obk_files.format_summary)(
-                result, file_name, lang)
+                result, file_name, lang, sender)
             if result.get("skipped"):
                 return {"summary": summary}
             if name == "summarize_raw_data_file":
-                paths = [obk_files.build_summary_workbook(result, file_name, lang)]
+                paths = [obk_files.build_summary_workbook(result, file_name, lang, sender)]
             else:
                 paths = [p for p in result.get("outputs", []) if not p.endswith(".png")]
                 bim_text, bim_path = bim_check_section(token, file_name, result)
@@ -653,6 +654,8 @@ def remember_group_file(chat_id, user_id, message):
         "fileName": message.get("fileName", ""),
         "fileSize": message.get("fileSize", 0),
         "time": time.time(),
+        "senderId": user_id,
+        "chatId": chat_id,
     }
     with pending_lock:
         now = time.time()
@@ -663,6 +666,28 @@ def remember_group_file(chat_id, user_id, message):
         pending_files_by_user[(chat_id, user_id)] = info
         pending_files_by_user[(chat_id, None)] = info          # latest file in the chat
         pending_files_by_id[message["id"]] = info
+
+
+_sender_names = {}
+
+
+def sender_name(file_info):
+    """LINE display name of whoever sent the file (group member profile works without friendship); '' if unknown."""
+    uid, chat_id = (file_info or {}).get("senderId"), (file_info or {}).get("chatId", "")
+    if not uid:
+        return ""
+    if (chat_id, uid) not in _sender_names:
+        name = ""
+        if chat_id[:1] in ("C", "R"):          # LINE group IDs start with C, room IDs with R
+            kind = "group" if chat_id.startswith("C") else "room"
+            try:
+                r = requests.get(LINE_MEMBER_API.format(kind=kind, chat_id=chat_id, user_id=uid),
+                                 headers=line_headers(), timeout=5)
+                name = r.json().get("displayName", "") if r.status_code == 200 else ""
+            except (requests.exceptions.RequestException, ValueError):
+                pass
+        _sender_names[(chat_id, uid)] = name or display_name(uid)
+    return _sender_names[(chat_id, uid)]
 
 
 def find_group_file(chat_id, user_id, quoted_message_id):
@@ -758,7 +783,7 @@ def handle_file(event, chat_id, user_id, base_url, message=None, mention_user_id
     if not validated:
         return
     file_name, result, token = validated
-    summary = obk_files.format_check_summary(result, file_name, user_langs.get(user_id, "th"))
+    summary = obk_files.format_check_summary(result, file_name, user_langs.get(user_id, "th"), sender_name(message))
     extra = []
     if not result.get("skipped"):
         outputs = list(result.get("outputs", []))
@@ -797,10 +822,11 @@ def handle_summary(event, chat_id, user_id, base_url, mention_user_id=None):
         return
     file_name, result, token = validated
     lang = user_langs.get(user_id, "th")
-    text = obk_files.format_summary(result, file_name, lang)
+    sender = sender_name(file_info)
+    text = obk_files.format_summary(result, file_name, lang, sender)
     if not result.get("skipped"):
         try:
-            path = obk_files.build_summary_workbook(result, file_name, lang)
+            path = obk_files.build_summary_workbook(result, file_name, lang, sender)
         except Exception:
             log.exception("Summary workbook failed")
             send_reply(event["replyToken"], chat_id, system_error_text(user_id))

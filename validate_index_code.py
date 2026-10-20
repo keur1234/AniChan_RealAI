@@ -435,6 +435,9 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False):
         'sample_failures': asset[~asset['TYPE'].isin(['TYPE A', 'N/A'])][['Asset ID', 'TYPE', 'validation_result', 'validation_result_thai']].head(10).to_dict('records'),
         'outputs': [p for p in [p1, p2, png] if p],
         'fas': fas,
+        # '' = not a 7-part index code, so no real component / sub system
+        'components': Counter(p[0] if len(p) >= 7 else '' for p in (str(a).split('-') for a in review['Asset ID'])),
+        'subsystems': Counter('-'.join(p[3:5]) if len(p) >= 7 else '' for p in (str(a).split('-') for a in review['Asset ID'])),
         'fas_special_codes': sorted(set(review.loc[review['TYPE'] == fas_rules.SPECIAL_TYPE, 'Asset ID'])),
         'checked_codes': list(asset['Asset ID']),
     }
