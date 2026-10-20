@@ -21,14 +21,15 @@ from google.genai import types
 from urllib.parse import quote
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-import bim_index
-import docs_library
-import obk_files
-import obk_reference
-import obk_validator
-import vicky_tools
-
+# Before our own modules: they read their settings from the environment when imported
 load_dotenv()
+
+import bim_index  # noqa: E402
+import docs_library  # noqa: E402
+import obk_files  # noqa: E402
+import obk_reference  # noqa: E402
+import obk_validator  # noqa: E402
+import vicky_tools  # noqa: E402
 
 app = Flask(__name__)
 # Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
