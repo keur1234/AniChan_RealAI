@@ -514,6 +514,9 @@ def remember(chat_id, user_text, reply):
 FAS_RE = re.compile(r"(?<![\w-])FAS(?![\w-])", re.IGNORECASE)
 
 
+CODE_LIKE_RE = re.compile(r"^[A-Za-z0-9_.]+(-[A-Za-z0-9_.]*)+$")    # letters/digits joined by dashes
+
+
 def wants_fas(text):
     return bool(FAS_RE.search(text or ""))
 
@@ -529,7 +532,8 @@ def extract_codes(text):
     command = next((c for c in CHECK_COMMANDS if lowered.startswith(c)), None)
     if command:
         body = FAS_RE.sub(" ", text[len(command):])
-        codes = obk_validator.find_codes(body) or body.split()
+        # Malformed codes still get checked (e.g. "bad-code"), plain words ("ด้วยสิ", "please") don't
+        codes = obk_validator.find_codes(body) or [w for w in body.split() if CODE_LIKE_RE.match(w)]
         return codes[:MAX_CODES_PER_MESSAGE], True
     return obk_validator.find_codes(text)[:MAX_CODES_PER_MESSAGE], False
 
