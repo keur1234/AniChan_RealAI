@@ -263,7 +263,7 @@ CHAT_PAGE = r"""<!doctype html>
 <body>
 <header><div class="wrap">
   <img class="avatar" src="/local/avatar.png" alt="Vicky">
-  <div class="title"><b>Vicky</b><span><i class="dot"></i>ผู้ช่วย AI โครงการ OBK · Local</span></div>
+  <div class="title"><b>Vicky</b><span><i class="dot"></i>น้องสาวของ วิคเตอร์ ผู้ช่วย AI ของ NXY · Local</span></div>
   <div class="who">{{NAME}}</div>
 </div></header>
 
