@@ -73,6 +73,14 @@ def has_allf_area(c):
     return any('ALLF' in p for p in c.split('-')[:3])
 
 
+def bim_floors(md):
+    """Rule 2: Component-Floor of every BIM ID ("C3A-001" from "C3A-001-ME01"). Built once per reference table."""
+    floors = md.get('bim_floor')
+    if floors is None:
+        floors = md['bim_floor'] = {"-".join(str(k).split("-")[:2]) for k in md['bim_id']
+                                    if k and len(str(k).split("-")) >= 2}
+    return floors
+
 def validate_index_code(code, md):
     """Returns (result_en, result_th, TYPE, rules[]) — same as the original script with running_counts=None."""
     if has_allf_area(code):
@@ -111,7 +119,7 @@ def validate_index_code(code, md):
         R.append("Rule 4: Location is not in Reference Table"); RT.append("กฏ 4: ไม่พบ Location นี้ใน Reference Table")
         R.append("Rule 3: CCDD is not in Reference Table"); RT.append("กฏ 3: ไม่พบ CCDD นี้ใน Reference Table")
         cnt += ["4", "3"]; mandatory += 1
-        if k_floor not in bim:
+        if k_floor not in bim_floors(md):
             R.append("Rule 2: Floor is not in Reference Table"); RT.append("กฏ 2: ไม่พบ Floor นี้ใน Reference Table"); mandatory += 1; cnt.append("2")
     if parts[5] not in md['equipment_code']:
         R.append("Rule 7: Equipment Type is not in Reference Table"); RT.append("กฏ 7: ไม่พบ Equipment Type นี้ใน Reference Table"); planBoC += 1; cnt.append("7")

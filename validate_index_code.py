@@ -156,6 +156,14 @@ PART_SPECS = [
     ("7", "Running No.", "Running Number", 3, False),
 ]
 
+def bim_floors(md):
+    """Rule 2: Component-Floor of every BIM ID ("C3A-001" from "C3A-001-ME01"). Built once per reference table."""
+    floors = md.get('bim_floor')
+    if floors is None:
+        floors = md['bim_floor'] = {"-".join(str(k).split("-")[:2]) for k in md['bim_id']
+                                    if k and len(str(k).split("-")) >= 2}
+    return floors
+
 def validate_index_code(code, md, running_counts=None, room=True):
     """คืน (result_en, result_th, TYPE, rules[])"""
     code = '' if pd.isna(code) else str(code)
@@ -186,11 +194,7 @@ def validate_index_code(code, md, running_counts=None, room=True):
             cnt.append(tag); mandatory += 1
 
     bim = md['bim_id']
-    bim_floor_set = {
-    "-".join(str(k).split("-")[:2])
-    for k in bim
-    if k and len(str(k).split("-")) >= 2
-    }
+    bim_floor_set = bim_floors(md)
     k_eq = f"{parts[3]}-{parts[4]}-{parts[5]}"
     k_loc = f"{parts[0]}-{parts[1]}-{parts[2]}"
     k_floor = f"{parts[0]}-{parts[1]}"
