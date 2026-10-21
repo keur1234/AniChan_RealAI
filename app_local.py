@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Chat with Vicky in your browser, without LINE.
 
-    python app_local.py              # opens http://127.0.0.1:5050
+    python app_local.py              # opens http://127.0.0.1:5050 in its own window
     python app_local.py --port 6000 --no-browser
+    python app_local.py --browser    # a normal browser tab instead of an app window
+
+Also packaged as Vicky.exe (see .github/workflows/build-vicky-windows.yml): no Python needed, and
+.env, obk_ref_bundle.json, documents.xlsx, bim_index.db and results/ live next to Vicky.exe.
 
 Same Vicky as app.py (validation, /check, /check FAS, /summary, /bim, documents, Gemini chat),
 running as a private chat with you. Drag Excel/CSV files onto the page (or use the paperclip) to send them.
@@ -13,14 +17,73 @@ import getpass
 import itertools
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
+import traceback
+import urllib.request
 import webbrowser
 
 from dotenv import load_dotenv
 
-load_dotenv()
+from app_paths import APP_DIR, FROZEN, RESOURCE_DIR
+
+if FROZEN:
+    # Vicky.exe: Thai text in the console window, relative paths from the exe's folder,
+    # and keep the window open on a crash so the error can be read
+    for stream in (sys.stdout, sys.stderr):
+        if stream and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    os.chdir(APP_DIR)
+
+    def _pause_on_error(kind, value, tb):
+        traceback.print_exception(kind, value, tb)
+        input("\nVicky หยุดทำงานเพราะเกิดข้อผิดพลาดด้านบน กด Enter เพื่อปิด...")
+    sys.excepthook = _pause_on_error
+
+load_dotenv(os.path.join(APP_DIR, ".env"))
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(description="Chat with Vicky in the browser, without LINE")
+    ap.add_argument("--port", type=int, default=int(os.getenv("LOCAL_PORT", "5050")))
+    ap.add_argument("--no-browser", action="store_true", help="don't open a window")
+    ap.add_argument("--browser", action="store_true", help="open a normal browser tab instead of an app window")
+    return ap.parse_args()
+
+
+def open_window(url, browser_tab=False):
+    """Edge in app mode (a window without tabs or address bar) on Windows; otherwise the default browser."""
+    if not browser_tab and sys.platform.startswith("win"):
+        candidates = [shutil.which("msedge"),
+                      os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                      os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe")]
+        for exe in candidates:
+            if exe and os.path.isfile(exe):
+                subprocess.Popen([exe, f"--app={url}", "--window-size=1120,880"])
+                return
+    webbrowser.open(url)
+
+
+def already_running(port):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/local/avatar.png", timeout=1) as r:
+            return r.status == 200
+    except OSError:
+        return False
+
+
+ARGS = parse_args() if __name__ == "__main__" else None
+if ARGS and already_running(ARGS.port):
+    # Vicky is already open (e.g. double-clicked twice): just show its window
+    if not ARGS.no_browser:
+        open_window(f"http://127.0.0.1:{ARGS.port}/chat", ARGS.browser)
+    sys.exit(0)
+if FROZEN and sys.platform.startswith("win"):
+    import ctypes
+    ctypes.windll.kernel32.SetConsoleTitleW("Vicky - ปิดหน้าต่างนี้เพื่อปิดโปรแกรม")
+    print("กำลังเปิด Vicky... (ครั้งแรกอาจใช้เวลาสักครู่)")
 # app.py reads these at import; nothing is sent to LINE from here
 os.environ.setdefault("LINE_CHANNEL_SECRET", "local")
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "local")
@@ -41,6 +104,7 @@ _lock = threading.Lock()           # one message at a time, like a single chat
 
 # Run app.py's handlers as a private chat with LOCAL_USER_ID; files come from uploads instead of LINE
 vicky.PRIVATE_CHAT_USERS[LOCAL_USER_ID] = LOCAL_USER_NAME
+vicky.ADMIN_USER_IDS.add(LOCAL_USER_ID)          # your own computer: /refresh and /bimsync allowed
 vicky.download_line_content = lambda message_id: _uploads[message_id]
 vicky.show_loading = lambda user_id: None
 vicky.display_name = lambda user_id: LOCAL_USER_NAME
@@ -145,7 +209,7 @@ def _local_request():
     return request.remote_addr in ("127.0.0.1", "::1")
 
 
-AVATAR_FILE = os.getenv("LOCAL_AVATAR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "vicky_avatar.png")
+AVATAR_FILE = os.getenv("LOCAL_AVATAR") or os.path.join(RESOURCE_DIR, "static", "vicky_avatar.png")
 
 
 @server.route("/local/avatar.png", methods=["GET"])
@@ -420,14 +484,12 @@ t.focus();
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Chat with Vicky in the browser, without LINE")
-    ap.add_argument("--port", type=int, default=int(os.getenv("LOCAL_PORT", "5050")))
-    ap.add_argument("--no-browser", action="store_true", help="don't open the browser")
-    args = ap.parse_args()
+    args = ARGS or parse_args()
     url = f"http://127.0.0.1:{args.port}/chat"
-    print(f"Vicky local chat: {url}  (Ctrl+C to stop)")
+    print(f"Vicky local chat: {url}")
+    print("ปิดหน้าต่างนี้ (หรือกด Ctrl+C) เพื่อปิด Vicky" if FROZEN else "Ctrl+C to stop")
     if not args.no_browser:
-        threading.Timer(1.0, webbrowser.open, [url]).start()
+        threading.Timer(1.0, open_window, [url, args.browser]).start()
     server.run(host="127.0.0.1", port=args.port, threaded=True)
 
 

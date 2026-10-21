@@ -1,0 +1,66 @@
+# Builds Vicky.exe (app_local.py, the local chat) for Windows, so it runs without Python.
+# Download: Actions tab > latest "Build Vicky for Windows" run > Artifacts > Vicky-windows
+name: Build Vicky for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "*.py"
+      - "requirements.txt"
+      - "static/**"
+      - "packaging/**"
+      - ".github/workflows/build-vicky-windows.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build Vicky.exe
+        run: >
+          pyinstaller --noconfirm --clean --name Vicky --icon static/vicky.ico
+          --add-data "static:static"
+          --hidden-import validate_index_code --hidden-import compare_asset_id --hidden-import fas_rules
+          --exclude-module tkinter --exclude-module IPython --exclude-module notebook --exclude-module gunicorn
+          app_local.py
+
+      - name: Add setup files
+        shell: pwsh
+        run: |
+          Copy-Item .env.example dist/Vicky/.env.example
+          Copy-Item documents_template.xlsx dist/Vicky/
+          Copy-Item packaging/README_TH.txt "dist/Vicky/อ่านก่อนใช้.txt"
+
+      - name: Smoke test (starts and serves the chat page)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/Vicky/Vicky.exe -ArgumentList "--no-browser","--port","5099" -PassThru
+          $ok = $false
+          foreach ($i in 1..60) {
+            Start-Sleep -Seconds 2
+            try { if ((Invoke-WebRequest http://127.0.0.1:5099/chat -UseBasicParsing).StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          $r = Invoke-RestMethod http://127.0.0.1:5099/local/send -Method Post -ContentType "application/json" -Body '{"text":"/refs"}'
+          Write-Host ($r.replies | ConvertTo-Json -Depth 4)
+          Stop-Process -Id $p.Id -Force
+          Remove-Item dist/Vicky/chat_history.csv, dist/Vicky/obk_ref_cache.json -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "Vicky.exe did not start" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vicky-windows
+          path: dist/Vicky
+          retention-days: 30

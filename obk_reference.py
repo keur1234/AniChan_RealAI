@@ -22,9 +22,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import obk_validator
+from app_paths import APP_DIR
 
 log = logging.getLogger("vicky")
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BANGKOK = timezone(timedelta(hours=7))
 
 EQUIPMENT_SHEET_URL = os.getenv("OBK_EQUIPMENT_SHEET_URL") or os.getenv("OBK_APPROVE_GSHEET_URL") or ""

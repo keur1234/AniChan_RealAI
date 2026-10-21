@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import obk_validator
+from app_paths import APP_DIR
 
 ALLOWED_EXTENSIONS = ('.xlsx', '.xlsm', '.xls', '.csv')
 MAX_FILE_BYTES = int(os.getenv("OBK_MAX_FILE_MB", "20")) * 1024 * 1024
@@ -19,7 +20,7 @@ WORK_ROOT = os.path.join(tempfile.gettempdir(), "anichan_obk")
 # Permanent copies of every result file (empty = keep nothing after the TTL); relative paths are under the project folder
 RESULTS_DIR = os.getenv("OBK_RESULTS_DIR", "").strip()
 if RESULTS_DIR and not os.path.isabs(RESULTS_DIR):
-    RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), RESULTS_DIR)
+    RESULTS_DIR = os.path.join(APP_DIR, RESULTS_DIR)
 BANGKOK = timezone(timedelta(hours=7))
 
 # Thai fonts to fall back to for Thai file/sheet names in the pie chart (Windows, Linux, macOS)

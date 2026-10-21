@@ -27,8 +27,9 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from app_paths import APP_DIR
+
 log = logging.getLogger("vicky")
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BANGKOK = timezone(timedelta(hours=7))
 
 DB_PATH = os.getenv("BIM_DB") or os.path.join(APP_DIR, "bim_index.db")

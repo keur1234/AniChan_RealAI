@@ -10,7 +10,9 @@ import os
 import re
 import threading
 
-DOCUMENTS_FILE = os.getenv("DOCUMENTS_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "documents.xlsx")
+from app_paths import APP_DIR
+
+DOCUMENTS_FILE = os.getenv("DOCUMENTS_FILE") or os.path.join(APP_DIR, "documents.xlsx")
 HEADERS = ["Keyword", "Link", "Other keywords", "Note"]
 
 log = logging.getLogger("vicky")

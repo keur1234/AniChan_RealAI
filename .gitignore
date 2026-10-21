@@ -11,3 +11,6 @@ bim_index.db-journal
 *.service-account.json
 bim_files/
 results/
+build/
+dist/
+*.spec

@@ -21,8 +21,10 @@ from google.genai import types
 from urllib.parse import quote
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from app_paths import APP_DIR
+
 # Before our own modules: they read their settings from the environment when imported
-load_dotenv()
+load_dotenv(os.path.join(APP_DIR, ".env"))
 
 import bim_index  # noqa: E402
 import docs_library  # noqa: E402
