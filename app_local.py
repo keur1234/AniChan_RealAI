@@ -29,7 +29,7 @@ if not os.getenv("GEMINI_API_KEY"):
     os.environ["GEMINI_API_KEY"] = "missing"
 
 import app as vicky  # noqa: E402
-from flask import abort, request  # noqa: E402
+from flask import abort, request, send_file  # noqa: E402
 
 LOCAL_USER_ID = "local-user"
 LOCAL_USER_NAME = os.getenv("LOCAL_USER_NAME") or getpass.getuser()
@@ -145,6 +145,16 @@ def _local_request():
     return request.remote_addr in ("127.0.0.1", "::1")
 
 
+AVATAR_FILE = os.getenv("LOCAL_AVATAR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "vicky_avatar.png")
+
+
+@server.route("/local/avatar.png", methods=["GET"])
+def local_avatar():
+    if not os.path.isfile(AVATAR_FILE):
+        abort(404)
+    return send_file(AVATAR_FILE, max_age=3600)
+
+
 @server.route("/chat", methods=["GET"])
 def chat_page():
     if not _local_request():
@@ -155,6 +165,7 @@ def chat_page():
 CHAT_PAGE = r"""<!doctype html>
 <html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vicky Local Chat</title>
+<link rel="icon" href="/local/avatar.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -176,6 +187,7 @@ CHAT_PAGE = r"""<!doctype html>
   header { background:color-mix(in srgb, var(--surface) 85%, transparent); backdrop-filter:blur(10px);
            border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
   header .wrap { display:flex; align-items:center; gap:12px; height:64px; }
+  img.avatar { object-fit:cover; border-radius:50% !important; background:var(--surface-2); box-shadow:0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
   .avatar { width:38px; height:38px; border-radius:12px; flex:none; display:grid; place-items:center;
             background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#fff; font-weight:600; }
   .title b { display:block; font-weight:600; line-height:1.2; }
@@ -250,13 +262,13 @@ CHAT_PAGE = r"""<!doctype html>
 </style></head>
 <body>
 <header><div class="wrap">
-  <div class="avatar">V</div>
+  <img class="avatar" src="/local/avatar.png" alt="Vicky">
   <div class="title"><b>Vicky</b><span><i class="dot"></i>ผู้ช่วย AI โครงการ OBK · Local</span></div>
   <div class="who">{{NAME}}</div>
 </div></header>
 
 <main id="scroll"><div class="wrap" style="padding:0"><div id="log">
-  <div class="welcome"><div class="avatar">V</div><h2>สวัสดีค่ะ หนู Vicky</h2>
+  <div class="welcome"><img class="avatar" src="/local/avatar.png" alt="Vicky"><h2>สวัสดีค่ะ หนู Vicky</h2>
     ลากไฟล์ Excel/CSV มาวางตรงไหนก็ได้ หรือกด 📎 แล้วพิมพ์ /check</div>
 </div></div></main>
 
@@ -326,7 +338,7 @@ function add(who, html, mono) {
   const row = document.createElement('div'); row.className = 'row ' + who;
   const cls = 'bubble' + (mono ? ' mono' : '');
   row.innerHTML = who === 'bot'
-    ? `<div class="avatar">V</div><div class="${cls}">${html}</div><div class="time">${now()}</div>`
+    ? `<img class="avatar" src="/local/avatar.png" alt="Vicky"><div class="${cls}">${html}</div><div class="time">${now()}</div>`
     : `<div class="time">${now()}</div><div class="${cls}">${html}</div>`;
   log.appendChild(row);
   row.querySelectorAll('img').forEach(img => img.addEventListener('load', toBottom));
