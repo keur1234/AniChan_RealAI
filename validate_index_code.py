@@ -186,6 +186,11 @@ def validate_index_code(code, md, running_counts=None, room=True):
             cnt.append(tag); mandatory += 1
 
     bim = md['bim_id']
+    bim_floor_set = {
+    "-".join(str(k).split("-")[:2])
+    for k in bim
+    if k and len(str(k).split("-")) >= 2
+    }
     k_eq = f"{parts[3]}-{parts[4]}-{parts[5]}"
     k_loc = f"{parts[0]}-{parts[1]}-{parts[2]}"
     k_floor = f"{parts[0]}-{parts[1]}"
@@ -195,7 +200,7 @@ def validate_index_code(code, md, running_counts=None, room=True):
         R.append("Rule 4: Location is not in Reference Table"); RT.append("กฏ 4: ไม่พบ Location นี้ใน Reference Table")
         R.append("Rule 3: CCDD is not in Reference Table"); RT.append("กฏ 3: ไม่พบ CCDD นี้ใน Reference Table")
         cnt += ["4", "3"]; mandatory += 1
-        if k_floor not in bim:
+        if k_floor not in bim_floor_set:
             R.append("Rule 2: Floor is not in Reference Table"); RT.append("กฏ 2: ไม่พบ Floor นี้ใน Reference Table"); mandatory += 1; cnt.append("2")
     if parts[5] not in md['equipment_code']:
         R.append("Rule 7: Equipment Type is not in Reference Table"); RT.append("กฏ 7: ไม่พบ Equipment Type นี้ใน Reference Table"); planBoC += 1; cnt.append("7")
