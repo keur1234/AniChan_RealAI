@@ -112,6 +112,30 @@ vicky.sender_name = lambda file_info: LOCAL_USER_NAME
 server = vicky.app
 
 
+def settings_report():
+    """Which .env was read and whether each reference source is found, printed at start-up."""
+    ref = vicky.obk_reference
+    env_path = os.path.join(APP_DIR, ".env")
+    lines = [f".env                    : {env_path} " + ("(พบ)" if os.path.isfile(env_path) else "(ไม่พบ!)")]
+
+    def path_line(name, value):
+        if not value:
+            return f"{name:<24}: ยังไม่ได้ตั้งค่า"
+        if any(c in value for c in "\n\t\r\a\b\f\v"):
+            return (f"{name:<24}: path เพี้ยน! ถ้าใส่ใน \"...\" ตัว \\n \\t ในชื่อโฟลเดอร์จะกลายเป็นตัวพิเศษ "
+                    f"ให้เอาเครื่องหมายคำพูดออก หรือใช้ '...' แทน")
+        full = os.path.abspath(ref._resolve(value))
+        return f"{name:<24}: {full} " + ("(พบ)" if os.path.isfile(full) else "(ไม่พบไฟล์!)")
+
+    lines.append(path_line("OBK_MAPPING_FILE", ref.MAPPING_FILE))
+    lines.append(path_line("OBK_AREA_FILE", ref.AREA_FILE))
+    lines.append(f"{'OBK_EQUIPMENT_SHEET_URL':<24}: " + ("ตั้งค่าแล้ว" if ref.EQUIPMENT_SHEET_URL else "ยังไม่ได้ตั้งค่า"))
+    lines.append(path_line("obk_ref_bundle.json", ref.bundle_path()))
+    if not (ref.MAPPING_FILE and ref.AREA_FILE) and not os.path.isfile(ref.bundle_path()):
+        lines.append("=> ยังตรวจ index codes ไม่ได้: ต้องมี obk_ref_bundle.json หรือตั้งทั้ง OBK_MAPPING_FILE และ OBK_AREA_FILE")
+    return "\n".join(lines)
+
+
 def run_message(message, base_url):
     """Handle one message as Vicky would and return what she replies (text and image URLs)."""
     event = {"type": "message", "replyToken": "local", "source": {"type": "user", "userId": LOCAL_USER_ID},
@@ -486,6 +510,7 @@ t.focus();
 def main():
     args = ARGS or parse_args()
     url = f"http://127.0.0.1:{args.port}/chat"
+    print(settings_report())
     print(f"Vicky local chat: {url}")
     print("ปิดหน้าต่างนี้ (หรือกด Ctrl+C) เพื่อปิด Vicky" if FROZEN else "Ctrl+C to stop")
     if not args.no_browser:
