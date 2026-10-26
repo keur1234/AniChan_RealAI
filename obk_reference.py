@@ -58,6 +58,11 @@ def _bundle_path():
     return _resolve(os.getenv("OBK_BUNDLE_PATH") or "obk_ref_bundle.json")
 
 
+def bundle_path():
+    """Full path Vicky reads obk_ref_bundle.json from (for messages)."""
+    return os.path.abspath(_bundle_path())
+
+
 def _note(name, status, detail):
     _state["sources"][name] = {"status": status, "detail": detail, "time": _now()}
     (log.info if status == "ok" else log.warning)("Reference %s: %s %s", name, status, detail)

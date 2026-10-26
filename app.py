@@ -225,8 +225,11 @@ def check_help(user_id):
 
 
 def no_reference_text(user_id):
-    return tr(user_id, "หนูยังไม่พบไฟล์อ้างอิง obk_ref_bundle.json จึงยังไม่สามารถ validate index codes ได้ค่ะ",
-              "I can't find the reference file obk_ref_bundle.json, so I can't validate index codes right now.")
+    path = obk_reference.bundle_path()
+    return tr(user_id, f"หนูยังไม่พบไฟล์อ้างอิง obk_ref_bundle.json จึงยังไม่สามารถ validate index codes ได้ค่ะ\n"
+                       f"กรุณาวางไฟล์ไว้ที่ {path} แล้วพิมพ์ /refresh ค่ะ",
+              f"I can't find the reference file obk_ref_bundle.json, so I can't validate index codes right now.\n"
+              f"Please put it at {path} and type /refresh.")
 
 
 def tr(user_id, th, en):
