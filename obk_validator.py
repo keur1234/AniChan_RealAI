@@ -73,6 +73,14 @@ def has_allf_area(c):
     return any('ALLF' in p for p in c.split('-')[:3])
 
 
+def bim_components(md):
+    """Rule 1: Component of every BIM ID ("C3A" from "C3A-001-ME01"), so a component counts as known when any of
+    its locations is in the reference, even if the room files left out the component row. Built once per table."""
+    comps = md.get('bim_component')
+    if comps is None:
+        comps = md['bim_component'] = {str(k).split("-")[0] for k in md['bim_id'] if k and str(k).split("-")[0]}
+    return comps
+
 def bim_floors(md):
     """Rule 2: Component-Floor of every BIM ID ("C3A-001" from "C3A-001-ME01"). Built once per reference table."""
     floors = md.get('bim_floor')
@@ -113,7 +121,7 @@ def validate_index_code(code, md):
     k_eq = f"{parts[3]}-{parts[4]}-{parts[5]}"
     k_loc = f"{parts[0]}-{parts[1]}-{parts[2]}"
     k_floor = f"{parts[0]}-{parts[1]}"
-    if parts[0] not in bim:
+    if parts[0] not in bim_components(md):
         R.append("Rule 1: Component is not in Reference Table"); RT.append("กฏ 1: ไม่พบ Component นี้ใน Reference Table"); mandatory += 1; cnt.append("1")
     if k_loc not in bim:
         R.append("Rule 4: Location is not in Reference Table"); RT.append("กฏ 4: ไม่พบ Location นี้ใน Reference Table")
