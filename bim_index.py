@@ -654,7 +654,7 @@ def _validate_codes(codes):
     return out
 
 
-def _report_frame(codes, validated, fas):
+def _report_frame(codes, validated, fas):  # fas: mark FAS special cases
     """Rows for compare_asset_id.py: Asset ID, TYPE, validation_result (+ NEW TYPE = N/A for FAS special cases)."""
     import pandas as pd
     import validate_index_code as vic
@@ -687,14 +687,16 @@ def _write_report(sub, bim, sub_name, bim_name, path_out):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def compare_file(path, file_name, out_dir, lang="th", with_stats=False, fas=False):
+def compare_file(path, file_name, out_dir, lang="th", with_stats=False, fas=False, scope=None):
     """Check every index code of a file against BIM. Returns (reply text, xlsx path or None[, stats]).
-    fas: FAS check, only CM-FIRE codes; FAS special cases (N/A กรณีพิเศษ) are not looked up in BIM."""
+    scope: e.g. "FAS" (only CM-FIRE codes, special cases N/A กรณีพิเศษ not looked up in BIM) or "ACS" (only CM-ACCS)."""
     import fas_rules
+    scope = scope or ("FAS" if fas else None)
+    fas = fas_rules.has_special_rules(scope)
 
     codes_df, col = _codes_from_file(path)
-    if codes_df is not None and fas:
-        codes_df = codes_df[codes_df["index codes"].map(fas_rules.keep_row)]
+    if codes_df is not None and scope:
+        codes_df = codes_df[codes_df["index codes"].map(lambda c: fas_rules.in_scope(c, scope))]
     if codes_df is None or codes_df.empty:
         msg = _t(lang, f"หนูไม่พบคอลัมน์ index codes ในไฟล์ {file_name} ค่ะ",
                  f"I couldn't find an index codes column in {file_name}.")
@@ -709,8 +711,8 @@ def compare_file(path, file_name, out_dir, lang="th", with_stats=False, fas=Fals
     missing = [c for c in unique if not counts.get(c)]
     components = {c.split("-")[0] for c in unique if "-" in c}
     bim_tags = _tag_counts_with_components(components)
-    if fas:
-        bim_tags = {t: n for t, n in bim_tags.items() if fas_rules.keep_row(t)}
+    if scope:
+        bim_tags = {t: n for t, n in bim_tags.items() if fas_rules.in_scope(t, scope)}
     bim_rows = [(t, t) for t, n in sorted(bim_tags.items()) for _ in range(n)]     # one row per BIM element
     bim = _report_frame(bim_rows, _validate_codes(bim_tags), fas)
     only_in_bim = sorted(set(bim_tags) - set(unique) - special)

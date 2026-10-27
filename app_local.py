@@ -8,7 +8,7 @@
 Also packaged as Vicky.exe (see .github/workflows/build-vicky-windows.yml): no Python needed, and
 .env, obk_ref_bundle.json, documents.xlsx, bim_index.db and results/ live next to Vicky.exe.
 
-Same Vicky as app.py (validation, /check, /check FAS, /summary, /bim, documents, Gemini chat),
+Same Vicky as app.py (validation, /check, /check FAS, /check ACS, /summary, /bim, documents, Gemini chat),
 running as a private chat with you. Drag Excel/CSV files onto the page (or use the paperclip) to send them.
 Needs GEMINI_API_KEY in .env for normal chat; LINE keys are not needed.
 """
@@ -364,6 +364,7 @@ CHAT_PAGE = r"""<!doctype html>
   <div class="chips">
     <button class="chip" data-send="/check">/check</button>
     <button class="chip" data-send="/check FAS">/check FAS</button>
+    <button class="chip" data-send="/check ACS">/check ACS</button>
     <button class="chip" data-send="/summary">/summary</button>
     <button class="chip" data-send="/bim">/bim</button>
     <button class="chip" data-send="/docs">/docs</button>

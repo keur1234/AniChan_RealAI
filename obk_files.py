@@ -74,7 +74,7 @@ def get_download(token, file_name):
     return None
 
 
-def validate_file(file_name, data, fas=False):
+def validate_file(file_name, data, fas=False, scope=None):
     """Run the original file pipeline. Returns (result dict, token for downloads)."""
     # Imported lazily so the chat bot still starts if pandas isn't installed
     import validate_index_code as vic
@@ -87,7 +87,7 @@ def validate_file(file_name, data, fas=False):
     with open(path, 'wb') as f:
         f.write(data)
 
-    result = vic.process_file(path, obk_validator.get_master(), os.path.join(job_dir, "out"), room=True, dup_mode='sheet', fas=fas)
+    result = vic.process_file(path, obk_validator.get_master(), os.path.join(job_dir, "out"), room=True, dup_mode='sheet', fas=fas, scope=scope)
     _add_bim_column(result)
     return result, token
 
@@ -109,8 +109,21 @@ SKIP_REASONS_EN = {
     'ไฟล์ว่าง': 'the file is empty',
     'ไม่พบคอลัมน์ Asset ID': 'no index code column was found',
     'ไม่มี Asset ID ที่ใช้ได้': 'no usable index codes were found',
-    'ไม่มี Asset ID CM-FIRE': 'no CM-FIRE index codes were found (FAS check)',
 }
+
+
+def _skip_reason_en(reason):
+    if reason.startswith('ไม่มี Asset ID ') and reason != 'ไม่มี Asset ID ที่ใช้ได้':
+        return f"no {reason[len('ไม่มี Asset ID '):]} index codes were found"
+    return SKIP_REASONS_EN.get(reason, reason)
+
+
+def scope_line(result, lang):
+    """'FAS check: ตรวจเฉพาะ index codes ที่มี CM-FIRE' for a scoped check, else ''."""
+    if not result.get('scope'):
+        return ''
+    return obk_validator._t(lang, f"{result['scope']} check: ตรวจเฉพาะ index codes ที่มี {result['scope_filter']}",
+                            f"{result['scope']} check: only index codes containing {result['scope_filter']}")
 
 
 def format_summary(result, file_name, lang='th', sender=None):
@@ -119,7 +132,7 @@ def format_summary(result, file_name, lang='th', sender=None):
     if result.get('skipped'):
         reason = (result['skipped'].replace('ไม่พบคอลัมน์ Asset ID', 'ไม่พบคอลัมน์ index codes')
                   .replace('ไม่มี Asset ID ที่ใช้ได้', 'ไม่มี index codes ที่ใช้ได้')
-                  if lang == 'th' else SKIP_REASONS_EN.get(result['skipped'], result['skipped']))
+                  if lang == 'th' else _skip_reason_en(result['skipped']))
         msg = [t(f"หนูไม่สามารถ validate ไฟล์ {file_name} ได้ค่ะ: {reason}", f"I couldn't validate {file_name}: {reason}")]
         if result.get('columns'):
             msg.append(t("คอลัมน์ที่พบในไฟล์: ", "Columns found: ") + ", ".join(result['columns'][:15]))
@@ -203,8 +216,9 @@ def build_summary_workbook(result, file_name, lang='th', sender=None):
         found = int((unique_codes['Found in BIM'] == 'Yes').sum())
         missing = int((unique_codes['Found in BIM'] == 'No').sum())
         summary_rows += [['Unique index codes', len(unique_codes)], ['Found in BIM', found], ['Not in BIM', missing]]
+    if result.get('scope'):
+        summary_rows.insert(1, [f"{result['scope']} check", f"only index codes containing {result['scope_filter']}"])
     if result.get('fas'):
-        summary_rows.insert(1, ['FAS check', 'only index codes containing CM-FIRE'])
         summary_rows.append([fas_special_label(lang), len(result.get('fas_special_codes', []))])
 
     sheets = [
@@ -318,8 +332,8 @@ def source_lines(result, file_name, lang='th', sender=None):
     if sender:
         lines.append(t("ส่งโดย: ", "Sent by: ") + sender)
     lines.append(t("คอลัมน์ที่ใช้: ", "Column used: ") + str(result.get('column_used', '')))
-    if result.get('fas'):
-        lines.append(t("FAS check: ตรวจเฉพาะ index codes ที่มี CM-FIRE", "FAS check: only index codes containing CM-FIRE"))
+    if result.get('scope'):
+        lines.append(scope_line(result, lang))
     if result.get('components'):
         lines.append(_counts_line("Components", result['components'], MAX_COMPONENTS_LISTED, lang))
     if result.get('subsystems'):

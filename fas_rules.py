@@ -37,3 +37,25 @@ def keep_row(asset_id):
 
 def is_special(asset_id, asset_type):
     return is_fire(asset_type) and (rule1_suffix(asset_id) or rule2_type(asset_type))
+
+
+# ---- Check scopes: "/check FAS", "/check ACS" ... keep only index codes containing a system code ----
+# special_rules: apply the FAS special cases above (N/A กรณีพิเศษ)
+SCOPES = {
+    "FAS": {"contains": FILTER_ASSET_ID_CONTAINS, "special_rules": True},
+    "ACS": {"contains": "CM-ACCS", "special_rules": False},
+}
+
+
+def scope_filter(scope):
+    """The text an index code must contain for this scope ('' = no filter)."""
+    return (SCOPES.get(scope) or {}).get("contains") or ""
+
+
+def in_scope(asset_id, scope):
+    f = scope_filter(scope)
+    return not f or f in str(asset_id).upper()
+
+
+def has_special_rules(scope):
+    return bool((SCOPES.get(scope) or {}).get("special_rules"))

@@ -32,6 +32,7 @@ import obk_files  # noqa: E402
 import obk_reference  # noqa: E402
 import obk_validator  # noqa: E402
 import vicky_tools  # noqa: E402
+import fas_rules  # noqa: E402
 
 app = Flask(__name__)
 # Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
@@ -142,7 +143,8 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - คำสั่งลัด: /bim ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /bim, /bimstatus ดูสถานะข้อมูล BIM
 - คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
   /docs เพื่อดูรายชื่อเอกสารของทีม
-- ตรวจ FAS: พิมพ์ /check FAS หรือ /summary FAS (หรือเรียก validate_raw_data_file / summarize_raw_data_file ด้วย fas=true เมื่อผู้ใช้ขอตรวจ FAS เท่านั้น)
+- ตรวจ FAS: พิมพ์ /check FAS หรือ /summary FAS (หรือเรียก validate_raw_data_file / summarize_raw_data_file ด้วย scope="FAS" เมื่อผู้ใช้ขอตรวจ FAS เท่านั้น)
+- ตรวจ ACS: พิมพ์ /check ACS หรือ /summary ACS (scope="ACS") ตรวจเฉพาะ index codes ที่มี CM-ACCS
   จะตรวจเฉพาะ Asset ID ที่มี CM-FIRE และ asset ที่เข้ากฎพิเศษนับเป็น N/A กรณีพิเศษ แยกต่างหาก ไม่นำไปหาใน BIM
 
 ## ศัพท์ของโครงการ OBK (เมื่อพูดเรื่อง index codes ต้องใช้ให้ตรง)
@@ -407,8 +409,9 @@ def run_tool(name, args, ctx):
             return {"summary": text, "_links": [file_link(ctx, token, path)]}
 
         if name in ("validate_raw_data_file", "summarize_raw_data_file"):
-            if args.get("fas"):
-                file_info = dict(file_info, _fas=True)
+            scope = str(args.get("scope") or "").upper() or ("FAS" if args.get("fas") else "")
+            if scope in fas_rules.SCOPES:
+                file_info = dict(file_info, _scope=scope)
             file_name, result, token, error = validate_file_info(file_info, user_id)
             if error:
                 return {"error": error}
@@ -515,20 +518,27 @@ def remember(chat_id, user_text, reply):
     history.append(types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
 
 
-# "/check FAS" (or "/summary FAS"): FAS check with the special rules in fas_rules.py
-FAS_RE = re.compile(r"(?<![\w-])FAS(?![\w-])", re.IGNORECASE)
+# "/check FAS", "/check ACS" (or /summary ...): check only one system's index codes, see fas_rules.SCOPES
+FAS_RE = re.compile(r"(?<![\w-])(?:" + "|".join(fas_rules.SCOPES) + r")(?![\w-])", re.IGNORECASE)
 
 
 CODE_LIKE_RE = re.compile(r"^[A-Za-z0-9_.]+(-[A-Za-z0-9_.]*)+$")    # letters/digits joined by dashes
 
 
+def wants_scope(text):
+    """'FAS', 'ACS' ... if the command asks for a scoped check, else None."""
+    m = FAS_RE.search(text or "")
+    return m.group(0).upper() if m else None
+
+
 def wants_fas(text):
-    return bool(FAS_RE.search(text or ""))
+    return wants_scope(text) == "FAS"
 
 
 def with_fas(file_info, text):
-    """The group file to validate, flagged for the FAS check if the command asked for it."""
-    return dict(file_info, _fas=True) if file_info and wants_fas(text) else file_info
+    """The group file to validate, flagged with the scope (FAS, ACS...) if the command asked for one."""
+    scope = wants_scope(text)
+    return dict(file_info, _scope=scope) if file_info and scope else file_info
 
 
 def extract_codes(text):
@@ -730,7 +740,8 @@ def validate_file_info(file_info, user_id):
                                          f"The file is larger than {mb} MB. Please split it and send it again.")
     try:
         data = file_info.get("_data") or download_line_content(file_info["id"])[0]
-        result, token = obk_files.validate_file(file_name, data, fas=bool(file_info.get("_fas")))
+        scope = file_info.get("_scope") or ("FAS" if file_info.get("_fas") else None)
+        result, token = obk_files.validate_file(file_name, data, scope=scope)
     except Exception:
         log.exception("File validation failed")
         return file_name, None, None, tr(
@@ -766,7 +777,7 @@ def bim_check_section(token, file_name, result=None):
     try:
         _, path, stats = bim_index.compare_file(os.path.join(job_dir, obk_files.safe_name(file_name)), file_name,
                                                 os.path.join(job_dir, "out"), "en", with_stats=True,
-                                                fas=bool(result and result.get("fas")))
+                                                scope=(result or {}).get("scope"))
     except Exception:
         log.exception("BIM check failed")
         return "", None

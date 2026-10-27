@@ -347,7 +347,9 @@ def save_pie(df, title, path):
     return path
 
 # ================= PIPELINE =================
-def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False):
+def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False, scope=None):
+    scope = scope or ('FAS' if fas else None)       # FAS / ACS ... see fas_rules.SCOPES
+    special_rules = fas_rules.has_special_rules(scope)
     log = []
     name = os.path.splitext(os.path.basename(path))[0]
     df_all = read_input(path, log)
@@ -362,10 +364,11 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False):
     # ตัด _point ท้าย Asset ID
     df['Asset ID'] = df[col].astype(str).apply(lambda x: x if '_' not in x else '_'.join(x.split('_')[:-1]))
     df = df[(df['Asset ID'] != '') & (df['Asset ID'] != 'nan') & (df['Asset ID'].str.strip() != '')].copy()
-    if fas:  # FAS check: only CM-FIRE rows (see fas_rules.py)
-        df = df[df['Asset ID'].map(fas_rules.keep_row)].copy()
+    if scope:  # e.g. FAS: only CM-FIRE rows, ACS: only CM-ACCS rows (see fas_rules.SCOPES)
+        df = df[df['Asset ID'].map(lambda a: fas_rules.in_scope(a, scope))].copy()
     if df.empty:
-        return {'file': path, 'skipped': 'ไม่มี Asset ID CM-FIRE' if fas else 'ไม่มี Asset ID ที่ใช้ได้', 'log': log}
+        return {'file': path, 'skipped': f'ไม่มี Asset ID {fas_rules.scope_filter(scope)}' if scope else 'ไม่มี Asset ID ที่ใช้ได้',
+                'log': log}
 
     # ตรวจจาก unique Asset ID แล้ว map กลับทุกแถว (get_results point=True)
     uniq = list(dict.fromkeys(df['Asset ID']))
@@ -383,7 +386,7 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False):
     review['Approved'] = review['Asset Type'].apply(lambda x: 'yes' if x in md['approved'] else 'no')
     review['TYPE'] = [apply_override(a, t) for a, t in zip(review['Asset ID'], review['TYPE'])]
     special = pd.Series(False, index=review.index)
-    if fas:  # FAS special cases: TYPE "N/A กรณีพิเศษ", counted separately, not looked up in BIM
+    if special_rules:  # FAS special cases: TYPE "N/A กรณีพิเศษ", counted separately, not looked up in BIM
         special = pd.Series([fas_rules.is_special(a, t) for a, t in zip(review['Asset ID'], review['Asset Type'])],
                             index=review.index)
         review.loc[special, 'TYPE'] = fas_rules.SPECIAL_TYPE
@@ -443,7 +446,7 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False):
         'worst_sheets': worst[['Source Sheet', 'TYPE A %', 'TOTAL']].to_dict('records'),
         'sample_failures': asset[~asset['TYPE'].isin(['TYPE A', 'N/A'])][['Asset ID', 'TYPE', 'validation_result', 'validation_result_thai']].head(10).to_dict('records'),
         'outputs': [p for p in [p1, p2, png] if p],
-        'fas': fas,
+        'scope': scope, 'scope_filter': fas_rules.scope_filter(scope), 'fas': special_rules,
         # '' = not a 7-part index code, so no real component / sub system
         'components': Counter(p[0] if len(p) >= 7 else '' for p in (str(a).split('-') for a in review['Asset ID'])),
         'subsystems': Counter('-'.join(p[3:5]) if len(p) >= 7 else '' for p in (str(a).split('-') for a in review['Asset ID'])),
