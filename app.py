@@ -34,6 +34,7 @@ import obk_validator  # noqa: E402
 import vicky_tools  # noqa: E402
 import fas_rules  # noqa: E402
 import llm_openai  # noqa: E402
+import admin_jobs  # noqa: E402
 
 app = Flask(__name__)
 # Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
@@ -164,6 +165,15 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 
 ## ข้อมูลตอนนี้
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
+"""
+
+ADMIN_PROMPT = """
+
+## Vicky-Admin (คุณกำลังคุยกับผู้ดูแลระบบ)
+- ผู้ดูแลสั่งงานอัปเดตได้ เช่น "อัปเดต BIM", "รีเฟรช ref", "สร้าง bundle ใหม่", "รัน build_ref"
+- ใช้ list_admin_jobs ดูงานที่มี แล้วใช้ run_admin_job ด้วยชื่องานที่ตรงที่สุด ถ้าไม่แน่ใจว่าหมายถึงงานไหน ให้ถามก่อน
+- งานรันเบื้องหลัง ให้บอกว่าเริ่มแล้วและจะแจ้งผลในแชทเมื่อเสร็จ ห้ามบอกว่าเสร็จแล้วก่อนได้ผล
+- รันได้เฉพาะงานในรายการ ถ้าผู้ดูแลอยากเพิ่มสคริปต์ ให้แนะนำเพิ่มใน admin_jobs.json
 """
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -367,15 +377,20 @@ def _generate(provider, chat_id, user_parts, history_text, user_id, ctx):
         links["docs"] += result.pop("_doc_links", [])
         return result
 
+    declarations = list(vicky_tools.FUNCTION_DECLARATIONS)
+    if user_id in ADMIN_USER_IDS:                  # Vicky-Admin
+        declarations += vicky_tools.ADMIN_DECLARATIONS
+        prompt += ADMIN_PROMPT
+
     if provider == "tokenme":
         user_text = "\n".join(p.text for p in user_parts if p.text) + "\n" + note
         images = [(p.inline_data.data, p.inline_data.mime_type) for p in user_parts if getattr(p, "inline_data", None)]
-        text = llm_openai.chat(prompt, history, user_text, vicky_tools.FUNCTION_DECLARATIONS, tool, MAX_TOOL_ROUNDS, images)
+        text = llm_openai.chat(prompt, history, user_text, declarations, tool, MAX_TOOL_ROUNDS, images)
         return _finish(text, links, user_id)
 
     contents = list(history) + [types.Content(role="user", parts=list(user_parts) + [types.Part.from_text(text=note)])]
     for _ in range(MAX_TOOL_ROUNDS):
-        response = generate_with_fallback(contents, prompt, [vicky_tools.FUNCTION_TOOL])
+        response = generate_with_fallback(contents, prompt, [types.Tool(function_declarations=declarations)])
         calls = response.function_calls or []
         if not calls:
             break
@@ -402,6 +417,16 @@ def run_tool(name, args, ctx):
     lang = user_langs.get(user_id, "th")
     log.info("Tool call %s %s", name, str(args)[:200])
     try:
+        if name in ("list_admin_jobs", "run_admin_job"):
+            if user_id not in ADMIN_USER_IDS:
+                return {"error": "Only administrators can run update jobs"}
+            if name == "list_admin_jobs":
+                return {"jobs": admin_jobs.status_text()}
+            chat_id = ctx.get("chat_id") or user_id
+            started, message = admin_jobs.run(str(args.get("name", "")), lambda text: notify(chat_id, text),
+                                              full=bool(args.get("full")))
+            return {"started": started, "message": message}
+
         if name in ("create_excel_file", "create_text_file"):
             token, out_dir = obk_files.new_job()
             if name == "create_excel_file":
@@ -684,6 +709,17 @@ def post_messages(reply_token, to, messages):
         return False
 
 
+def notify(chat_id, text):
+    """Message a chat without a reply token (e.g. when a Vicky-Admin job finishes). app_local.py replaces this."""
+    messages = [{"type": "text", "text": chunk} for chunk in split_for_line(clean_for_line(text))]
+    try:
+        r = requests.post(LINE_PUSH_API, headers=line_headers(),
+                          data=json.dumps({"to": chat_id, "messages": messages}), timeout=10)
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        log.error("Push to %s failed: %s %s", chat_id, e, getattr(e.response, "text", ""))
+
+
 def send_reply(reply_token, to, text, extra_messages=(), mention_user_id=None):
     extra_messages = list(extra_messages)
     chunks = split_for_line(clean_for_line(text))[:LINE_MAX_MESSAGES - len(extra_messages)]
@@ -932,6 +968,19 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
     """/docs, or a request that names a team document (from documents.xlsx). Returns True if handled."""
     reply = lambda t: send_reply(event["replyToken"], chat_id, t, mention_user_id=mention_user_id)
     lowered = text.lower()
+
+    if lowered.startswith(("/admin", "/run")):
+        if user_id not in ADMIN_USER_IDS:
+            reply(tr(user_id, "คำสั่งนี้ใช้ได้เฉพาะผู้ดูแลค่ะ", "Only administrators can use this command."))
+            return True
+        words = text.split()
+        if lowered.startswith("/run") and len(words) > 1:
+            started, message = admin_jobs.run(words[1], lambda t: notify(chat_id, t),
+                                              full=any(w.lower() == "full" for w in words[2:]))
+            reply(message)
+        else:
+            reply(admin_jobs.status_text())
+        return True
 
     if lowered.startswith(("/model", "/ai")):
         reply(ai_status())

@@ -14,3 +14,4 @@ results/
 build/
 dist/
 *.spec
+admin_jobs.json

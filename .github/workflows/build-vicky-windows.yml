@@ -42,6 +42,7 @@ jobs:
         run: |
           Copy-Item .env.example dist/Vicky/.env.example
           Copy-Item documents_template.xlsx dist/Vicky/
+          Copy-Item admin_jobs.example.json dist/Vicky/
           Copy-Item packaging/README_TH.txt "dist/Vicky/อ่านก่อนใช้.txt"
 
       - name: Smoke test (starts and serves the chat page)

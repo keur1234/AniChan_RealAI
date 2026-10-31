@@ -18,6 +18,12 @@ Vicky (โปรแกรมแชทในเครื่อง) — ไม่�
 - ผลตรวจเก็บไว้ในโฟลเดอร์ results (ถ้าใส่ OBK_RESULTS_DIR=results ใน .env) กดการ์ดไฟล์เพื่อเปิดโฟลเดอร์
 - คำสั่ง: /check, /check FAS, /summary, /bim, /docs, /refs, /refresh, /bimsync, /reset
 
+Vicky-Admin (สั่งงานอัปเดต)
+- พิมพ์ /admin ดูงานที่สั่งได้ หรือสั่งเป็นภาษาธรรมดา เช่น "อัปเดต BIM", "สร้าง bundle ใหม่"
+- งานในตัว: bim_update, reference_refresh, bundle_rebuild
+- เพิ่มสคริปต์ของคุณเอง (เช่น build_ref.py): ก๊อป admin_jobs.example.json เป็น admin_jobs.json แล้วแก้ path
+- งานรันเบื้องหลัง เสร็จแล้วผลจะขึ้นในแชทเอง
+
 หมายเหตุ
 - Windows SmartScreen อาจเตือนตอนเปิดครั้งแรก เพราะโปรแกรมไม่ได้ลงลายเซ็น กด "More info" > "Run anyway"
 - อย่าส่งต่อโฟลเดอร์นี้พร้อมไฟล์ .env เพราะมี API key อยู่ในนั้น

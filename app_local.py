@@ -108,6 +108,9 @@ vicky.download_line_content = lambda message_id: _uploads[message_id]
 vicky.show_loading = lambda user_id: None
 vicky.display_name = lambda user_id: LOCAL_USER_NAME
 vicky.sender_name = lambda file_info: LOCAL_USER_NAME
+# Vicky-Admin results arrive after the reply; the page picks them up from /local/notices
+_notices = []
+vicky.notify = lambda chat_id, text: _notices.append(text)
 server = vicky.app
 
 
@@ -195,6 +198,16 @@ def local_open():
     except OSError as e:
         return {"ok": False, "error": str(e), "path": path}
     return {"ok": True, "path": path}
+
+
+@server.route("/local/notices", methods=["GET"])
+def local_notices():
+    if not _local_request():
+        abort(403)
+    out = []
+    while _notices:
+        out.append({"text": _notices.pop(0)})
+    return {"notices": out}
 
 
 @server.route("/local/send", methods=["POST"])
@@ -351,7 +364,7 @@ CHAT_PAGE = r"""<!doctype html>
 <header><div class="wrap">
   <img class="avatar" src="/local/avatar.png" alt="Vicky">
   <div class="title"><b>Vicky</b><span><i class="dot"></i>น้องสาวของ วิคเตอร์ AI ผู้ช่วย ของ NXY · Local</span></div>
-  <div class="who">{{NAME}}</div>
+  <div class="who">{{NAME}} · Vicky-Admin</div>
 </div></header>
 
 <main id="scroll"><div class="wrap" style="padding:0"><div id="log">
@@ -367,6 +380,7 @@ CHAT_PAGE = r"""<!doctype html>
     <button class="chip" data-send="/summary">/summary</button>
     <button class="chip" data-send="/bim">/bim</button>
     <button class="chip" data-send="/docs">/docs</button>
+    <button class="chip" data-send="/admin">/admin</button>
     <button class="chip" data-send="/reset">/reset</button>
   </div>
   <form class="composer" id="f">
@@ -501,6 +515,13 @@ t.addEventListener('paste', e => {
   const files = [...(e.clipboardData?.files || [])];
   if (files.length) { e.preventDefault(); sendFiles(files); }
 });
+// Vicky-Admin: results of background jobs (BIM update, scripts...) appear when they finish
+setInterval(async () => {
+  try {
+    const r = await fetch('/local/notices').then(r => r.json());
+    for (const n of r.notices) add('bot', render(n.text, {}));
+  } catch (e) {}
+}, 3000);
 t.focus();
 </script>
 </body></html>
