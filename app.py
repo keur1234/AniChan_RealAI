@@ -142,6 +142,7 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
   ผลจากเครื่องมือบอกเวลาข้อมูล BIM ให้แจ้งผู้ใช้ด้วย
 - พิมพ์ index codes หรือบางส่วนของ index code (เช่น CUP-002-0027) ระบบจะค้นใน BIM DB ให้ทันที find_in_bim รับบางส่วนได้
 - คำสั่งลัด: /bim ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /bim, /bimstatus ดูสถานะข้อมูล BIM
+- ถ้าถูกถามว่าใช้ AI หรือโมเดลอะไร ให้ตอบว่าพิมพ์ /model เพื่อดู (หนูไม่รู้ชื่อโมเดลที่กำลังตอบอยู่เอง)
 - คำสั่งลัด: /check ตามด้วย index codes หรือส่งไฟล์แล้วพิมพ์ /check เพื่อ validate, /summary เพื่อสร้างตารางสรุปจากไฟล์ที่ส่งมา,
   /docs เพื่อดูรายชื่อเอกสารของทีม
 - ตรวจ FAS: พิมพ์ /check FAS หรือ /summary FAS (หรือเรียก validate_raw_data_file / summarize_raw_data_file ด้วย scope="FAS" เมื่อผู้ใช้ขอตรวจ FAS เท่านั้น)
@@ -313,6 +314,24 @@ def ai_providers(user_parts):
     return gemini + tokenme if AI_PROVIDER == "gemini" else tokenme + gemini
 
 
+def ai_status():
+    """Which AI answers, for /model and the start-up report."""
+    order = []
+    if llm_openai.ready():
+        order.append(f"tokenme: {llm_openai.MODEL} (รูปภาพ: {llm_openai.VISION_MODEL or 'ส่งให้ Gemini'})")
+    if client is not None:
+        order.append(f"Gemini: {GEMINI_MODEL}")
+    if AI_PROVIDER == "gemini":
+        order.reverse()
+    if not order:
+        return "AI: ยังไม่ได้ตั้งค่า (ใส่ TOKENME_API_KEY หรือ GEMINI_API_KEY ใน .env)"
+    lines = [f"AI ตัวหลัก: {order[0]}"] + [f"AI สำรอง: {o}" for o in order[1:]]
+    if not llm_openai.ready():
+        lines.append("tokenme: ไม่ได้ใช้ (ไม่พบ TOKENME_API_KEY ใน .env)")
+    lines.append(f"AI_PROVIDER={AI_PROVIDER}")
+    return "\n".join(lines)
+
+
 def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
     """Ask the AI for Vicky's reply, running any tools she calls; if one AI fails, the next one answers.
 
@@ -323,7 +342,9 @@ def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
         raise RuntimeError("No AI configured: set TOKENME_API_KEY or GEMINI_API_KEY in .env")
     for i, provider in enumerate(providers):
         try:
-            return _generate(provider, chat_id, user_parts, history_text, user_id, ctx)
+            result = _generate(provider, chat_id, user_parts, history_text, user_id, ctx)
+            log.info("Answered by %s", provider)
+            return result
         except Exception as e:
             if i == len(providers) - 1:
                 raise
@@ -911,6 +932,10 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
     """/docs, or a request that names a team document (from documents.xlsx). Returns True if handled."""
     reply = lambda t: send_reply(event["replyToken"], chat_id, t, mention_user_id=mention_user_id)
     lowered = text.lower()
+
+    if lowered.startswith(("/model", "/ai")):
+        reply(ai_status())
+        return True
 
     if lowered.startswith("/refresh"):
         if user_id not in ADMIN_USER_IDS:

@@ -511,6 +511,7 @@ def main():
     args = ARGS or parse_args()
     url = f"http://127.0.0.1:{args.port}/chat"
     print(settings_report())
+    print(vicky.ai_status())
     print(f"Vicky local chat: {url}")
     print("ปิดหน้าต่างนี้ (หรือกด Ctrl+C) เพื่อปิด Vicky" if FROZEN else "Ctrl+C to stop")
     if not args.no_browser:
