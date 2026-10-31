@@ -33,6 +33,7 @@ import obk_reference  # noqa: E402
 import obk_validator  # noqa: E402
 import vicky_tools  # noqa: E402
 import fas_rules  # noqa: E402
+import llm_openai  # noqa: E402
 
 app = Flask(__name__)
 # Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
@@ -164,7 +165,10 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - วันเวลาปัจจุบัน (เวลาประเทศไทย): {now}
 """
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# Which AI answers chat: auto = tokenme (DeepSeek) when TOKENME_API_KEY is set, Gemini as the backup
+# (and for images); gemini = Gemini first, tokenme as the backup
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower()
 executor = ThreadPoolExecutor(max_workers=int(os.getenv("WORKERS", "8")))
 
 # chat_id -> deque of types.Content (in-memory, per gunicorn worker)
@@ -274,6 +278,8 @@ def generate_with_fallback(contents, system_instruction, tools=()):
     attempts.append((GEMINI_MODEL, False))
     attempts += [(m, False) for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
 
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not set")
     for i, (model, search) in enumerate(attempts):
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -299,37 +305,70 @@ def generate_with_fallback(contents, system_instruction, tools=()):
 MAX_TOOL_ROUNDS = 5
 
 
+def ai_providers(user_parts):
+    """The AIs to try for this message, in order."""
+    images = [p for p in user_parts if getattr(p, "inline_data", None)]
+    tokenme = ["tokenme"] if llm_openai.can_handle(images) else []
+    gemini = ["gemini"] if client is not None else []
+    return gemini + tokenme if AI_PROVIDER == "gemini" else tokenme + gemini
+
+
 def generate_response(chat_id, user_parts, history_text, user_id="", ctx=None):
-    """Ask Gemini for Vicky's reply, running any tools she calls.
+    """Ask the AI for Vicky's reply, running any tools she calls; if one AI fails, the next one answers.
 
     Returns (reply text, links): links is {"files": [...expiring downloads], "docs": [...team documents]}.
     """
+    providers = ai_providers(user_parts)
+    if not providers:
+        raise RuntimeError("No AI configured: set TOKENME_API_KEY or GEMINI_API_KEY in .env")
+    for i, provider in enumerate(providers):
+        try:
+            return _generate(provider, chat_id, user_parts, history_text, user_id, ctx)
+        except Exception as e:
+            if i == len(providers) - 1:
+                raise
+            log.warning("%s failed (%s: %s); answering with %s", provider, type(e).__name__, str(e)[:200], providers[i + 1])
+
+
+def _generate(provider, chat_id, user_parts, history_text, user_id, ctx):
     history = chat_histories[chat_id]
     # Per-message reminder (not stored in history): group chats mix languages and the prompt is Thai
     name = language_name(history_text) or ("Thai" if user_langs.get(user_id) == "th" else None)
     note = (f"[Reply language: {name}. Write the whole reply in {name}.]" if name else
             "[Reply in the same language as this message, e.g. English if it is written in English.]")
-    contents = list(history) + [types.Content(role="user", parts=list(user_parts) + [types.Part.from_text(text=note)])]
     ctx = ctx or {}
     links = {"files": [], "docs": []}
     prompt = SYSTEM_PROMPT.format(now=thai_now())
 
+    def tool(name, args):
+        result = run_tool(name, args, ctx)
+        links["files"] += result.pop("_links", [])
+        links["docs"] += result.pop("_doc_links", [])
+        return result
+
+    if provider == "tokenme":
+        user_text = "\n".join(p.text for p in user_parts if p.text) + "\n" + note
+        images = [(p.inline_data.data, p.inline_data.mime_type) for p in user_parts if getattr(p, "inline_data", None)]
+        text = llm_openai.chat(prompt, history, user_text, vicky_tools.FUNCTION_DECLARATIONS, tool, MAX_TOOL_ROUNDS, images)
+        return _finish(text, links, user_id)
+
+    contents = list(history) + [types.Content(role="user", parts=list(user_parts) + [types.Part.from_text(text=note)])]
     for _ in range(MAX_TOOL_ROUNDS):
         response = generate_with_fallback(contents, prompt, [vicky_tools.FUNCTION_TOOL])
         calls = response.function_calls or []
         if not calls:
             break
         contents.append(response.candidates[0].content)
-        parts = []
-        for call in calls:
-            result = run_tool(call.name, dict(call.args or {}), ctx)
-            links["files"] += result.pop("_links", [])
-            links["docs"] += result.pop("_doc_links", [])
-            parts.append(types.Part.from_function_response(name=call.name, response=result))
+        parts = [types.Part.from_function_response(name=call.name, response=tool(call.name, dict(call.args or {})))
+                 for call in calls]
         contents.append(types.Content(role="user", parts=parts))
 
     text = "".join(p.text for p in (response.candidates[0].content.parts or []) if getattr(p, "text", None) and not p.thought) \
         if response.candidates and response.candidates[0].content else ""
+    return _finish(text, links, user_id)
+
+
+def _finish(text, links, user_id):
     reply = text.strip() or (tr(user_id, "หนูดำเนินการให้เรียบร้อยแล้วค่ะ", "Done.") if links["files"] or links["docs"] else
                              tr(user_id, "ขออภัยค่ะ หนูไม่สามารถสร้างคำตอบได้ กรุณาลองถามใหม่อีกครั้งค่ะ",
                                 "Sorry, I couldn't come up with an answer. Please try asking again."))
@@ -1219,15 +1258,17 @@ def ask_ani(event, chat_id, user_id, user_parts, history_text, mention_user_id=N
             # Remember the reply exactly as sent (with links) so "this file" in the next message makes sense
             remember(chat_id, history_text, reply)
         except genai_errors.APIError as e:
-            log.error("Gemini call failed: %s %s", e.code, e.message)
+            log.error("AI call failed (Gemini): %s %s", e.code, e.message)
             if e.code == 429:
                 reply = tr(user_id, "ขออภัยค่ะ ขณะนี้หนูใช้งานเกินโควตาแล้ว กรุณาลองใหม่อีกครั้งภายหลังค่ะ",
                            "Sorry, I've reached my usage quota. Please try again later.")
             else:
                 reply = system_error_text(user_id)
-        except Exception:
-            log.exception("Gemini call failed")
-            reply = system_error_text(user_id)
+        except Exception as e:
+            log.exception("AI call failed")
+            reply = (tr(user_id, "ขออภัยค่ะ ขณะนี้หนูใช้งานเกินโควตาแล้ว กรุณาลองใหม่อีกครั้งภายหลังค่ะ",
+                        "Sorry, I've reached my usage quota. Please try again later.")
+                     if type(e).__name__ == "RateLimitError" else system_error_text(user_id))
         else:
             store_chat_history_to_csv(chat_id, user_id, history_text, reply)
 

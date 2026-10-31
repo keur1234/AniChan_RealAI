@@ -10,7 +10,7 @@ Also packaged as Vicky.exe (see .github/workflows/build-vicky-windows.yml): no P
 
 Same Vicky as app.py (validation, /check, /check FAS, /check ACS, /summary, /bim, documents, Gemini chat),
 running as a private chat with you. Drag Excel/CSV files onto the page (or use the paperclip) to send them.
-Needs GEMINI_API_KEY in .env for normal chat; LINE keys are not needed.
+Needs TOKENME_API_KEY and/or GEMINI_API_KEY in .env for normal chat; LINE keys are not needed.
 """
 import argparse
 import getpass
@@ -87,9 +87,8 @@ if FROZEN and sys.platform.startswith("win"):
 # app.py reads these at import; nothing is sent to LINE from here
 os.environ.setdefault("LINE_CHANNEL_SECRET", "local")
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "local")
-if not os.getenv("GEMINI_API_KEY"):
-    print("GEMINI_API_KEY is not set in .env: /check, /summary and /bim work, normal chat won't")
-    os.environ["GEMINI_API_KEY"] = "missing"
+if not (os.getenv("GEMINI_API_KEY") or os.getenv("TOKENME_API_KEY")):
+    print("No AI key in .env (TOKENME_API_KEY or GEMINI_API_KEY): /check, /summary and /bim work, normal chat won't")
 
 import app as vicky  # noqa: E402
 from flask import abort, request, send_file  # noqa: E402

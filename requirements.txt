@@ -8,3 +8,4 @@ openpyxl
 xlrd
 matplotlib
 gdown
+openai>=1.0
