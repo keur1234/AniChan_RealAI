@@ -3,13 +3,17 @@
 Built-in jobs are below. Your own scripts go in admin_jobs.json next to the program (see admin_jobs.example.json):
 
     {
-      "build_ref": {
-        "description": "สร้าง ref.xlsx (Register Location) จากไฟล์ห้องของแต่ละ component",
-        "command": ["python", "D:\\\\Scripts\\\\build_ref.py"],
-        "cwd": "D:\\\\Scripts",
-        "timeout_minutes": 30
+      "bim_update": {
+        "description": "รัน update_bim_db.py ในโฟลเดอร์โปรเจกต์ แล้วก๊อป bim_index.db มาใช้",
+        "command": ["D:\\\\AniChan_RealAI\\\\myenv\\\\Scripts\\\\python.exe", "update_bim_db.py"],
+        "cwd": "D:\\\\AniChan_RealAI",
+        "timeout_minutes": 120,
+        "copy": [{"from": "D:\\\\AniChan_RealAI\\\\bim_index.db", "to": "bim_index.db"}]
       }
     }
+
+"copy" runs after the command succeeds: each file is copied over "to" (relative = next to the program).
+A job in admin_jobs.json with the same name as a built-in one (e.g. bim_update) replaces it.
 
 Only jobs listed here can run: Vicky picks a job by name, she can't run any other command.
 Jobs run in the background; when one finishes, notify(text) gets the result.
@@ -42,9 +46,16 @@ def _now():
 
 # ---------------------------------------------------------------- built-in jobs
 def _bim_update(full):
+    """Read the BIM files already in the folder (copied there by hand) into the DB: no download, fast."""
     import bim_index
-    if not bim_index.configured():
-        raise RuntimeError("ยังไม่ได้ตั้ง BIM_DRIVE_FOLDER หรือ BIM_LOCAL_FOLDER ใน .env")
+    report = bim_index.sync(force=full, download=False)
+    return f"อ่านไฟล์จาก {bim_index.source_folder()}\n{report}\n\n{bim_index.format_status('th')}"
+
+
+def _bim_download(full):
+    import bim_index
+    if not bim_index.DRIVE_FOLDER:
+        raise RuntimeError("ยังไม่ได้ตั้ง BIM_DRIVE_FOLDER ใน .env")
     report = bim_index.sync(force=full)
     return f"{report}\n\n{bim_index.format_status('th')}"
 
@@ -88,8 +99,9 @@ def _bundle_rebuild(full):
 
 
 BUILT_IN = {
-    "bim_update": ("อัปเดตฐานข้อมูล BIM: ดาวน์โหลดไฟล์ใหม่จาก Drive แล้วอ่านเข้า DB "
-                   "(full=true อ่านใหม่ทุกไฟล์)", _bim_update),
+    "bim_update": ("อัปเดตฐานข้อมูล BIM จากไฟล์ที่ก๊อปมาวางในโฟลเดอร์ BIM แล้ว (ไม่โหลดจาก Drive, เร็ว) "
+                   "ใช้เมื่อสั่ง 'อัปเดต BIM' (full=true อ่านใหม่ทุกไฟล์)", _bim_update),
+    "bim_download": ("โหลดไฟล์ BIM ใหม่จาก Google Drive แล้วอัปเดต DB (ช้า) ใช้เฉพาะเมื่อสั่งให้โหลดจาก Drive", _bim_download),
     "reference_refresh": ("โหลดตารางอ้างอิงใหม่ทันที (Mapping, Area Code, Equipment Google Sheet, bundle)", _reference_refresh),
     "bundle_rebuild": ("สร้าง obk_ref_bundle.json ใหม่จาก OBK_MAPPING_FILE + OBK_AREA_FILE + Equipment Google Sheet "
                        "(เก็บไฟล์เดิมเป็น backup)", _bundle_rebuild),
@@ -107,7 +119,7 @@ def custom_jobs():
     except (OSError, ValueError) as e:
         log.warning("admin_jobs.json could not be read: %s", e)
         return {}
-    return {str(k): v for k, v in data.items() if isinstance(v, dict) and v.get("command") and k not in BUILT_IN}
+    return {str(k): v for k, v in data.items() if isinstance(v, dict) and (v.get("command") or v.get("copy"))}
 
 
 def _run_command(spec):
@@ -134,11 +146,39 @@ def _run_command(spec):
     return f"{summary}\n{text}" if text else summary
 
 
+def _copy_outputs(spec):
+    """Copy the job's output files ("copy": [{"from", "to"}]) into place; "to" is relative to the program's folder."""
+    lines = []
+    for item in spec.get("copy") or []:
+        src = item.get("from", "")
+        dst = item.get("to") or os.path.basename(src)
+        if not os.path.isabs(dst):
+            dst = os.path.join(APP_DIR, dst)
+        if not os.path.isfile(src):
+            raise RuntimeError(f"ไม่พบไฟล์ที่จะก๊อป: {src}")
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        tmp = dst + ".copying"
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)              # swap in one step so lookups never see a half-copied file
+        lines.append(f"ก๊อป {src} -> {dst} ({os.path.getsize(dst) / 1048576:.1f} MB)")
+    return "\n".join(lines)
+
+
+def _run_custom(spec):
+    parts = []
+    if spec.get("command"):
+        parts.append(_run_command(spec))
+    if spec.get("copy"):
+        parts.append(_copy_outputs(spec))
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------- running
 def jobs():
     """[{name, description, kind}] of every job an admin can run."""
-    out = [{"name": n, "description": d, "kind": "built-in"} for n, (d, _) in BUILT_IN.items()]
-    out += [{"name": n, "description": s.get("description", ""), "kind": "script"} for n, s in custom_jobs().items()]
+    custom = custom_jobs()
+    out = [{"name": n, "description": d, "kind": "built-in"} for n, (d, _) in BUILT_IN.items() if n not in custom]
+    out += [{"name": n, "description": s.get("description", ""), "kind": "script"} for n, s in custom.items()]
     return out
 
 
@@ -155,7 +195,7 @@ def run(name, notify, full=False):
     def work():
         started = _running[name]
         try:
-            result = BUILT_IN[name][1](full) if name in BUILT_IN else _run_command(custom[name])
+            result = _run_custom(custom[name]) if name in custom else BUILT_IN[name][1](full)
             ok = True
         except subprocess.TimeoutExpired:
             ok, result = False, "หมดเวลา (timeout)"

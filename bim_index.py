@@ -53,6 +53,7 @@ TAG_COLUMN = os.getenv("BIM_TAG_COLUMN", "OBK.FM_25Digits_TAG")
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 SYNC_WEEKDAY = WEEKDAYS.index(os.getenv("BIM_SYNC_DAY", "mon").strip().lower()[:3])
 SYNC_HOUR, SYNC_MINUTE = (int(x) for x in os.getenv("BIM_SYNC_TIME", "06:00").split(":"))
+AUTO_SYNC = os.getenv("BIM_AUTO_SYNC", "1") != "0"         # 0 = no weekly update; update by hand (bim_update)
 RETRY_SECONDS = 600            # after a failed attempt, wait before trying again
 SCHEDULER_CHECK_SECONDS = 1800
 
@@ -219,6 +220,11 @@ def configured():
     return bool(LOCAL_FOLDER or DRIVE_FOLDER)
 
 
+def source_folder():
+    """Where the BIM Excel files are read from: BIM_LOCAL_FOLDER, else bim_files (where Drive downloads go)."""
+    return LOCAL_FOLDER or DOWNLOAD_DIR
+
+
 def ready():
     """The DB has been built (by the bot or by update_bim_db.py) and can answer lookups."""
     return bool(last_sync())
@@ -325,14 +331,17 @@ def _read_tags(data, name=""):
     return rows
 
 
-def sync(force=False, progress=None):
-    """Download (if a Drive folder is set) and index new or changed BIM files. Returns a short report."""
-    if not configured():
+def sync(force=False, progress=None, download=True):
+    """Download (if a Drive folder is set and download=True) and index new or changed BIM files. Returns a short report.
+    download=False: only read the files already in source_folder() (e.g. copied there by hand)."""
+    if download and not configured():
         return "BIM source not configured (set BIM_LOCAL_FOLDER or BIM_DRIVE_FOLDER)"
+    if not download and not os.path.isdir(source_folder()):
+        return f"ไม่พบโฟลเดอร์ไฟล์ BIM: {source_folder()} (สร้างโฟลเดอร์แล้วก๊อปไฟล์ BIM มาวาง)"
     with _lock:
         _state["last_attempt"] = time.time()
         download_report = ""
-        if DRIVE_FOLDER:
+        if DRIVE_FOLDER and download:
             try:
                 download_report = download_from_drive(force, progress)
             except Exception as e:                     # keep going with whatever is already downloaded
@@ -432,7 +441,7 @@ def maybe_sync():
 
 def start_scheduler():
     """Check every 30 minutes whether the weekly sync is due, so it runs even when nobody is chatting."""
-    if _state["scheduler"] or not configured():
+    if _state["scheduler"] or not configured() or not AUTO_SYNC:
         return
     _state["scheduler"] = True
 

@@ -177,7 +177,8 @@ ADMIN_DECLARATIONS = [
           "their own scripts) with their last result."),
     _decl("run_admin_job",
           "Vicky-Admin: start one of the jobs from list_admin_jobs when the administrator asks to update/run it "
-          "(e.g. 'อัปเดต BIM' -> bim_update, 'รีเฟรช ref' -> reference_refresh, 'สร้าง bundle ใหม่' -> bundle_rebuild). "
+          "(e.g. 'อัปเดต BIM' -> bim_update, 'โหลด BIM จาก Drive' -> bim_download, 'รีเฟรช ref' -> reference_refresh, "
+          "'สร้าง bundle ใหม่' -> bundle_rebuild). "
           "It runs in the background and the result is sent to the chat when it finishes.",
           {"name": {"type": "string", "description": "Job name exactly as listed by list_admin_jobs"},
            "full": {"type": "boolean", "description": "bim_update only: re-read every file instead of only new/changed ones"}},

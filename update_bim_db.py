@@ -10,6 +10,7 @@ Run it whenever you like (the bot also does it every week if BIM_DRIVE_FOLDER is
     python update_bim_db.py --drive <folder link> # use this Drive folder
     python update_bim_db.py --folder D:\\BIM       # skip downloading; build from Excel files already on disk
     python update_bim_db.py --full                # re-download and re-read every file
+    python update_bim_db.py --no-download         # files copied into bim_files by hand: just build the DB
 
 The bot can stay running while this runs; it sees the new data on the next question.
 """
@@ -30,6 +31,8 @@ def main():
     ap.add_argument("--download-dir", help="where downloaded files go (default: bim_files next to this script)")
     ap.add_argument("--db", help="DB file (default: bim_index.db next to this script)")
     ap.add_argument("--full", action="store_true", help="re-download and re-read every file")
+    ap.add_argument("--no-download", action="store_true",
+                    help="don't download from Drive; only read the files already in the BIM folder (bim_files)")
     args = ap.parse_args()
 
     # bim_index reads its settings from the environment when it is imported
@@ -45,7 +48,7 @@ def main():
         os.environ["BIM_DB"] = args.db
 
     import bim_index
-    if not bim_index.configured():
+    if not bim_index.configured() and not args.no_download:
         sys.exit("No source: pass --drive <Drive folder link> or --folder <local folder>, "
                  "or set BIM_DRIVE_FOLDER in .env")
 
@@ -57,7 +60,10 @@ def main():
     print(f"Reads  : column {bim_index.TAG_COLUMN}, sheet {bim_index.SHEET}{rules}\n")
 
     started = time.time()
-    report = bim_index.sync(force=args.full, progress=lambda msg: print("  " + msg, flush=True))
+    if args.no_download:
+        print(f"Files  : {bim_index.source_folder()} (no download)")
+    report = bim_index.sync(force=args.full, progress=lambda msg: print("  " + msg, flush=True),
+                            download=not args.no_download)
     print(f"\n{report}\nDone in {time.time() - started:.0f}s\n")
     print(bim_index.format_status("en"))
 

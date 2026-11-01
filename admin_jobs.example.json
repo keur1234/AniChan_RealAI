@@ -1,14 +1,15 @@
 {
-  "build_ref": {
-    "description": "สร้าง ref.xlsx (Register Location) ใหม่จากไฟล์ห้องของแต่ละ component",
-    "command": ["python", "E:\\Data Science\\OneBangkok\\Meeting Assets\\Room Area Code\\build_ref.py"],
-    "cwd": "E:\\Data Science\\OneBangkok\\Meeting Assets\\Room Area Code",
-    "timeout_minutes": 30
-  },
-  "update_bim_db_script": {
-    "description": "รัน update_bim_db.py (โหลดไฟล์ BIM จาก Drive แล้วสร้าง DB) แบบเดียวกับรันเองใน cmd",
+  "bim_update": {
+    "description": "รัน update_bim_db.py ในโฟลเดอร์โปรเจกต์ (โหลดไฟล์ BIM แล้วสร้าง DB) แล้วก๊อป bim_index.db มาใช้",
     "command": ["D:\\AniChan_RealAI\\myenv\\Scripts\\python.exe", "update_bim_db.py"],
     "cwd": "D:\\AniChan_RealAI",
-    "timeout_minutes": 120
+    "timeout_minutes": 120,
+    "copy": [{"from": "D:\\AniChan_RealAI\\bim_index.db", "to": "bim_index.db"}]
+  },
+  "build_ref": {
+    "description": "สร้าง ref.xlsx (Register Location) ใหม่จากไฟล์ห้องของแต่ละ component",
+    "command": ["D:\\AniChan_RealAI\\myenv\\Scripts\\python.exe", "E:\\Data Science\\OneBangkok\\Meeting Assets\\Room Area Code\\build_ref.py"],
+    "cwd": "E:\\Data Science\\OneBangkok\\Meeting Assets\\Room Area Code",
+    "timeout_minutes": 30
   }
 }
