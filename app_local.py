@@ -15,6 +15,7 @@ Needs TOKENME_API_KEY and/or GEMINI_API_KEY in .env for normal chat; LINE keys a
 import argparse
 import getpass
 import itertools
+import logging
 import os
 import re
 import shutil
@@ -112,6 +113,15 @@ vicky.sender_name = lambda file_info: LOCAL_USER_NAME
 _notices = []
 vicky.notify = lambda chat_id, text: _notices.append(text)
 server = vicky.app
+
+
+class _QuietPolling(logging.Filter):
+    """Keep the console readable: don't log the page's background checks for job results."""
+    def filter(self, record):
+        return not any(p in record.getMessage() for p in ("/local/notices", "/local/avatar.png"))
+
+
+logging.getLogger("werkzeug").addFilter(_QuietPolling())
 
 
 def settings_report():
@@ -516,12 +526,14 @@ t.addEventListener('paste', e => {
   if (files.length) { e.preventDefault(); sendFiles(files); }
 });
 // Vicky-Admin: results of background jobs (BIM update, scripts...) appear when they finish
+// (only while the window is visible; results wait on the server until then)
 setInterval(async () => {
+  if (document.hidden) return;
   try {
     const r = await fetch('/local/notices').then(r => r.json());
     for (const n of r.notices) add('bot', render(n.text, {}));
   } catch (e) {}
-}, 3000);
+}, 5000);
 t.focus();
 </script>
 </body></html>
