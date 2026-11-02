@@ -166,6 +166,30 @@ def find_codes(text):
     return [m.group(0) for m in CODE_CANDIDATE_RE.finditer(text)]
 
 
+# Asset Type = Main System-Sub System-Equipment, e.g. AC-AHUS-000AHU (rule 8), not part of a longer code
+ASSET_TYPE_RE = re.compile(r"(?<![A-Za-z0-9-])[A-Za-z0-9]{2}-[A-Za-z0-9]{4}-[A-Za-z0-9]{6}(?![A-Za-z0-9-])")
+
+
+def find_asset_types(text):
+    return list(dict.fromkeys(m.group(0).upper() for m in ASSET_TYPE_RE.finditer(text or "")))
+
+
+def format_asset_types(asset_types, md, lang='th'):
+    """Short answer: which Asset Types are in the equipment reference (the table rule 8 checks)."""
+    lines = [_t(lang, "Asset Type ในตารางอ้างอิง (Equipment)", "Asset Types in the reference (Equipment)")]
+    found = 0
+    for a in asset_types:
+        if a in md['equipment_type']:
+            found += 1
+            note = "" if a.split('-')[2] in md['equipment_code'] else \
+                _t(lang, f" (แต่ Equipment {a.split('-')[2]} ไม่อยู่ในตาราง: กฎ 7)", f" (but equipment {a.split('-')[2]} is not listed: rule 7)")
+            lines.append(f"✅ {a}{note}")
+        else:
+            lines.append(f"❌ {a}")
+    lines.append(_t(lang, f"พบ {found} จาก {len(asset_types)}", f"Found {found} of {len(asset_types)}"))
+    return "\n".join(lines)
+
+
 def check_code(code, md):
     """Validate one code and add hints a human can act on."""
     code = code.strip()

@@ -150,6 +150,11 @@ FUNCTION_DECLARATIONS = [
           "Check every index code in the latest Excel/CSV sent in this chat (or a team document) against BIM: "
           "found / not found / in BIM but not in the file, with an Excel result file.",
           {"document_name": {"type": "string", "description": "Team document to use instead of the chat file (optional)"}}),
+    _decl("check_asset_types",
+          "Check whether Asset Types (Main-Sub-Equipment, e.g. AC-AHUS-000AHU) are in the equipment reference table "
+          "used for rule 8. Use when the user asks if equipment/asset types are in the ref.",
+          {"asset_types": {"type": "array", "items": {"type": "string"}, "description": "e.g. AC-FCUS-FANCLU"}},
+          ["asset_types"]),
     _decl("validate_index_codes",
           "Run the OBK validation program on index codes typed by the user. Only when the user asks to validate/check them.",
           {"codes": {"type": "array", "items": {"type": "string"}, "description": "Index codes, max 10"}},

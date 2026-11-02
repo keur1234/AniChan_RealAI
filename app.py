@@ -460,6 +460,13 @@ def run_tool(name, args, ctx):
             bim_index.maybe_sync()
             return {"report": bim_index.answer_lookup(codes, lang)}
 
+        if name == "check_asset_types":
+            master = obk_validator.get_master()
+            if master is None:
+                return {"error": "reference data is not loaded"}
+            asset_types = [str(a).strip().upper() for a in args.get("asset_types", []) if str(a).strip()][:50]
+            return {"report": obk_validator.format_asset_types(asset_types, master, lang)}
+
         if name == "validate_index_codes":
             master = obk_validator.get_master()
             if master is None:
@@ -1261,6 +1268,20 @@ def handle_text(event, chat_id, user_id, text, mention_user_id=None):
             send_reply(reply_token, chat_id, report)
             return
         text = f"{text}\n\n[ผล validation จากระบบ / system validation result]\n{report}"
+    elif not check_command and master is not None and obk_validator.find_asset_types(text):
+        # Asset Types (AC-AHUS-000AHU) -> is each one in the equipment reference? Answered from the table, no AI
+        asset_types = obk_validator.find_asset_types(text)
+        answer = obk_validator.format_asset_types(asset_types, master, lang)
+        leftover = text.upper()
+        for a in asset_types:
+            leftover = leftover.replace(a, "")
+        if len(leftover.strip()) <= 40 or re.search(r"ref|อ้างอิง|มีไหม|มีมั้ย|เจอไหม|ตาราง", text, re.IGNORECASE):
+            with chat_locks[chat_id]:
+                remember(chat_id, text, answer)
+            store_chat_history_to_csv(chat_id, user_id, text, answer)
+            send_reply(reply_token, chat_id, answer)
+            return
+        text = f"{text}\n\n[ผลค้น Asset Type ในตารางอ้างอิง / reference lookup]\n{answer}"
     elif bim_ready and not check_command:
         # Part of an index code (e.g. CUP-002-0027) with little else -> search the BIM DB directly
         parts = bim_index.find_partials(text)
