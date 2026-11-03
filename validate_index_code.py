@@ -367,7 +367,7 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False, sco
     if scope:  # e.g. FAS: only CM-FIRE rows, ACS: only CM-ACCS rows (see fas_rules.SCOPES)
         df = df[df['Asset ID'].map(lambda a: fas_rules.in_scope(a, scope))].copy()
     if df.empty:
-        return {'file': path, 'skipped': f'ไม่มี Asset ID {fas_rules.scope_filter(scope)}' if scope else 'ไม่มี Asset ID ที่ใช้ได้',
+        return {'file': path, 'skipped': f'ไม่มี Asset ID {fas_rules.scope_filter(scope)}' if fas_rules.scope_filter(scope) else 'ไม่มี Asset ID ที่ใช้ได้',
                 'log': log}
 
     # ตรวจจาก unique Asset ID แล้ว map กลับทุกแถว (get_results point=True)

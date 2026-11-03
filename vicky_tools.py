@@ -114,9 +114,9 @@ SHEETS_SCHEMA = {
     },
 }
 
-SCOPE_PARAM = {"type": "string", "enum": ["FAS", "ACS"],
+SCOPE_PARAM = {"type": "string", "enum": ["FAS", "ACS", "BMS"],
                "description": "Only when the user asks for it: FAS = fire alarm (CM-FIRE codes, special cases N/A), "
-                              "ACS = access control (CM-ACCS codes)"}
+                              "ACS = access control (CM-ACCS codes), BMS = compare with BIM's BMS Asset Types only"}
 
 FUNCTION_DECLARATIONS = [
     _decl("find_document_links",

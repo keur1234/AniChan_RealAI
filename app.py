@@ -148,6 +148,7 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
   /docs เพื่อดูรายชื่อเอกสารของทีม
 - ตรวจ FAS: พิมพ์ /check FAS หรือ /summary FAS (หรือเรียก validate_raw_data_file / summarize_raw_data_file ด้วย scope="FAS" เมื่อผู้ใช้ขอตรวจ FAS เท่านั้น)
 - ตรวจ ACS: พิมพ์ /check ACS หรือ /summary ACS (scope="ACS") ตรวจเฉพาะ index codes ที่มี CM-ACCS
+- ตรวจ BMS: พิมพ์ /check BMS (scope="BMS") ไฟล์ต้นทางไม่กรอง ฝั่ง BIM เทียบเฉพาะ Asset Type ของ BMS
   จะตรวจเฉพาะ Asset ID ที่มี CM-FIRE และ asset ที่เข้ากฎพิเศษนับเป็น N/A กรณีพิเศษ แยกต่างหาก ไม่นำไปหาใน BIM
 
 ## ศัพท์ของโครงการ OBK (เมื่อพูดเรื่อง index codes ต้องใช้ให้ตรง)

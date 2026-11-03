@@ -387,6 +387,7 @@ CHAT_PAGE = r"""<!doctype html>
     <button class="chip" data-send="/check">/check</button>
     <button class="chip" data-send="/check FAS">/check FAS</button>
     <button class="chip" data-send="/check ACS">/check ACS</button>
+    <button class="chip" data-send="/check BMS">/check BMS</button>
     <button class="chip" data-send="/summary">/summary</button>
     <button class="chip" data-send="/bim">/bim</button>
     <button class="chip" data-send="/docs">/docs</button>

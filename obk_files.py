@@ -100,7 +100,7 @@ def _add_bim_column(result):
     for p in result.get('outputs', []):
         if p.endswith('.xlsx'):
             try:
-                bim_index.add_found_column(p, skip=result.get('fas_special_codes', ()))
+                bim_index.add_found_column(p, skip=result.get('fas_special_codes', ()), scope=result.get('scope'))
             except Exception:
                 logging.getLogger(__name__).exception("Adding Found in BIM to %s failed", p)
 
@@ -122,8 +122,8 @@ def scope_line(result, lang):
     """'FAS check: ตรวจเฉพาะ index codes ที่มี CM-FIRE' for a scoped check, else ''."""
     if not result.get('scope'):
         return ''
-    return obk_validator._t(lang, f"{result['scope']} check: ตรวจเฉพาะ index codes ที่มี {result['scope_filter']}",
-                            f"{result['scope']} check: only index codes containing {result['scope_filter']}")
+    import fas_rules
+    return fas_rules.scope_description(result['scope'], lang)
 
 
 def format_summary(result, file_name, lang='th', sender=None):
@@ -217,7 +217,8 @@ def build_summary_workbook(result, file_name, lang='th', sender=None):
         missing = int((unique_codes['Found in BIM'] == 'No').sum())
         summary_rows += [['Unique index codes', len(unique_codes)], ['Found in BIM', found], ['Not in BIM', missing]]
     if result.get('scope'):
-        summary_rows.insert(1, [f"{result['scope']} check", f"only index codes containing {result['scope_filter']}"])
+        import fas_rules
+        summary_rows.insert(1, [f"{result['scope']} check", fas_rules.scope_description(result['scope'], 'en').split(": ", 1)[1]])
     if result.get('fas'):
         summary_rows.append([fas_special_label(lang), len(result.get('fas_special_codes', []))])
 

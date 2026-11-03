@@ -15,3 +15,4 @@ build/
 dist/
 *.spec
 admin_jobs.json
+bms_asset_types.txt

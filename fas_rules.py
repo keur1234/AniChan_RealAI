@@ -39,12 +39,49 @@ def is_special(asset_id, asset_type):
     return is_fire(asset_type) and (rule1_suffix(asset_id) or rule2_type(asset_type))
 
 
-# ---- Check scopes: "/check FAS", "/check ACS" ... keep only index codes containing a system code ----
-# special_rules: apply the FAS special cases above (N/A กรณีพิเศษ)
+# ---- Check scopes: "/check FAS", "/check ACS", "/check BMS" ----
+# contains:        keep only index codes containing this text, in the file and in BIM ("" = keep all)
+# special_rules:   apply the FAS special cases above (N/A กรณีพิเศษ)
+# bim_asset_types: BIM side only: keep BIM index codes whose Asset Type (parts 4-6) is in this list
+#                  (the file itself is not filtered); see bms_asset_types.py
 SCOPES = {
     "FAS": {"contains": FILTER_ASSET_ID_CONTAINS, "special_rules": True},
     "ACS": {"contains": "CM-ACCS", "special_rules": False},
+    "BMS": {"contains": "", "special_rules": False, "bim_asset_types": "bms"},
 }
+_asset_type_lists = {}
+
+
+def bim_asset_types(scope):
+    """The Asset Types BIM is limited to for this scope, or None."""
+    name = (SCOPES.get(scope) or {}).get("bim_asset_types")
+    if not name:
+        return None
+    if name not in _asset_type_lists:
+        import bms_asset_types
+        _asset_type_lists[name] = bms_asset_types.load()
+    return _asset_type_lists[name]
+
+
+def bim_in_scope(tag, scope):
+    """Is this BIM index code part of the comparison for this scope?"""
+    types = bim_asset_types(scope)
+    if types is not None:
+        return "-".join(str(tag).upper().split("-")[3:6]) in types
+    return in_scope(tag, scope)
+
+
+def scope_description(scope, lang="th"):
+    """'FAS check: ตรวจเฉพาะ index codes ที่มี CM-FIRE' etc. ('' for a normal check)."""
+    if not scope:
+        return ""
+    types = bim_asset_types(scope)
+    if types is not None:
+        return (f"{scope} check: ฝั่ง BIM เทียบเฉพาะ Asset Type ของ {scope} ({len(types)} ชนิด) ไฟล์ต้นทางไม่กรอง"
+                if lang == "th" else
+                f"{scope} check: BIM limited to {len(types)} {scope} Asset Types; the file is not filtered")
+    return (f"{scope} check: ตรวจเฉพาะ index codes ที่มี {scope_filter(scope)}" if lang == "th" else
+            f"{scope} check: only index codes containing {scope_filter(scope)}")
 
 
 def scope_filter(scope):

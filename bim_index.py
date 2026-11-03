@@ -507,7 +507,7 @@ def count_by_tag(codes):
         con.close()
 
 
-def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="Asset ID", skip=()):
+def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="Asset ID", skip=(), scope=None):
     """Append a "Found in BIM" (Yes/No) column to the given sheets of a validation output workbook.
     Codes in `skip` (FAS special cases) get "N/A กรณีพิเศษ" and are not looked up."""
     from openpyxl import load_workbook
@@ -529,6 +529,9 @@ def add_found_column(xlsx_path, sheets=("Sheet1", "Duplicates"), code_header="As
     codes = {normalize(ws.cell(r, col).value) for ws, col in targets for r in range(2, ws.max_row + 1)
              if ws.cell(r, col).value is not None} - skip
     counts = count_by_tag(codes)
+    if scope:                                   # e.g. BMS: only BIM index codes of the scope's Asset Types count
+        import fas_rules
+        counts = {c: (n if fas_rules.bim_in_scope(c, scope) else 0) for c, n in counts.items()}
     for ws, col in targets:
         new = ws.max_column + 1
         head = ws.cell(1, new, "Found in BIM")
@@ -715,13 +718,15 @@ def compare_file(path, file_name, out_dir, lang="th", with_stats=False, fas=Fals
     special = set(sub.loc[sub.get("NEW TYPE", "") == "N/A", "Asset ID"]) if fas else set()
     unique = [c for c in dict.fromkeys(codes_df["index codes"]) if c not in special]
     counts = count_by_tag(unique)
+    if scope:                                   # only BIM index codes in the scope count as found (e.g. BMS types)
+        counts = {c: (n if fas_rules.bim_in_scope(c, scope) else 0) for c, n in counts.items()}
     total = len(unique)
     found = sum(1 for c in unique if counts.get(c))
     missing = [c for c in unique if not counts.get(c)]
     components = {c.split("-")[0] for c in unique if "-" in c}
     bim_tags = _tag_counts_with_components(components)
     if scope:
-        bim_tags = {t: n for t, n in bim_tags.items() if fas_rules.in_scope(t, scope)}
+        bim_tags = {t: n for t, n in bim_tags.items() if fas_rules.bim_in_scope(t, scope)}
     bim_rows = [(t, t) for t, n in sorted(bim_tags.items()) for _ in range(n)]     # one row per BIM element
     bim = _report_frame(bim_rows, _validate_codes(bim_tags), fas)
     only_in_bim = sorted(set(bim_tags) - set(unique) - special)
