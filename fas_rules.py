@@ -42,12 +42,13 @@ def is_special(asset_id, asset_type):
 # ---- Check scopes: "/check FAS", "/check ACS", "/check BMS" ----
 # contains:        keep only index codes containing this text, in the file and in BIM ("" = keep all)
 # special_rules:   apply the FAS special cases above (N/A กรณีพิเศษ)
-# bim_asset_types: BIM side only: keep BIM index codes whose Asset Type (parts 4-6) is in this list
-#                  (the file itself is not filtered); see bms_asset_types.py
+# exclude:         drop index codes containing any of these, in the file and in BIM
+# bim_asset_types: BIM side only: keep BIM index codes whose Asset Type (parts 4-6) is in this list; see bms_asset_types.py
 SCOPES = {
     "FAS": {"contains": FILTER_ASSET_ID_CONTAINS, "special_rules": True},
     "ACS": {"contains": "CM-ACCS", "special_rules": False},
-    "BMS": {"contains": "", "special_rules": False, "bim_asset_types": "bms"},
+    "BMS": {"contains": "", "special_rules": False, "bim_asset_types": "bms",
+            "exclude": ["CM-ACCS", "CM-CCTV", "CM-FIRE"]},
 }
 _asset_type_lists = {}
 
@@ -67,7 +68,8 @@ def bim_in_scope(tag, scope):
     """Is this BIM index code part of the comparison for this scope?"""
     types = bim_asset_types(scope)
     if types is not None:
-        return "-".join(str(tag).upper().split("-")[3:6]) in types
+        tag = str(tag).upper()
+        return "-".join(tag.split("-")[3:6]) in types and not any(x in tag for x in scope_excludes(scope))
     return in_scope(tag, scope)
 
 
@@ -76,10 +78,13 @@ def scope_description(scope, lang="th"):
     if not scope:
         return ""
     types = bim_asset_types(scope)
+    excludes = ", ".join(scope_excludes(scope))
     if types is not None:
-        return (f"{scope} check: ฝั่ง BIM เทียบเฉพาะ Asset Type ของ {scope} ({len(types)} ชนิด) ไฟล์ต้นทางไม่กรอง"
-                if lang == "th" else
-                f"{scope} check: BIM limited to {len(types)} {scope} Asset Types; the file is not filtered")
+        if lang == "th":
+            text = f"{scope} check: ฝั่ง BIM เทียบเฉพาะ Asset Type ของ {scope}"
+            return text + (f" | ตัด {excludes} ออกทั้งสองฝั่ง" if excludes else " | ไฟล์ต้นทางไม่กรอง")
+        text = f"{scope} check: BIM limited to {scope} Asset Types"
+        return text + (f"; {excludes} left out on both sides" if excludes else "; the file is not filtered")
     return (f"{scope} check: ตรวจเฉพาะ index codes ที่มี {scope_filter(scope)}" if lang == "th" else
             f"{scope} check: only index codes containing {scope_filter(scope)}")
 
@@ -89,9 +94,14 @@ def scope_filter(scope):
     return (SCOPES.get(scope) or {}).get("contains") or ""
 
 
+def scope_excludes(scope):
+    return [x.upper() for x in (SCOPES.get(scope) or {}).get("exclude") or []]
+
+
 def in_scope(asset_id, scope):
+    code = str(asset_id).upper()
     f = scope_filter(scope)
-    return not f or f in str(asset_id).upper()
+    return (not f or f in code) and not any(x in code for x in scope_excludes(scope))
 
 
 def has_special_rules(scope):
