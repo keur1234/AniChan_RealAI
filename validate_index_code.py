@@ -256,7 +256,14 @@ def apply_override(asset_id, t):
 def find_check_column(df):
     df = df.loc[:, ~df.columns.duplicated(keep='first')]
     cmap = {str(c).strip().lower(): c for c in df.columns}
-    return next((cmap[c.strip().lower()] for c in CANDIDATE_COLUMNS if c.strip().lower() in cmap), None)
+    found = next((cmap[c.strip().lower()] for c in CANDIDATE_COLUMNS if c.strip().lower() in cmap), None)
+    if found is None:   # same names written with -, _ or spaces, e.g. "NEW INDEX-CODE"
+        norm = lambda x: re.sub(r'[\s_-]+', '', str(x)).lower()
+        nmap = {}
+        for col in df.columns:
+            nmap.setdefault(norm(col), col)
+        found = next((nmap[norm(c)] for c in CANDIDATE_COLUMNS if norm(c) in nmap), None)
+    return found
 
 def read_with_header_search(reader):
     """ลอง header row 0..4 จนกว่าจะเจอคอลัมน์ Asset ID"""
