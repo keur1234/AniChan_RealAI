@@ -194,7 +194,7 @@ def check_code(code, md):
     """Validate one code and add hints a human can act on."""
     code = code.strip()
     if '_' in code:                      # drop the _point suffix like the file pipeline does
-        code = '_'.join(code.split('_')[:-1])
+        code = code.split('_')[0]
     en, th, t, rules = validate_index_code(code, md)
     t = apply_override(code, t)
     parts = (strip_exception_suffix(code) if has_exception_suffix(code) else code).split('-')

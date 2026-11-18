@@ -30,7 +30,7 @@ def raw_codes(path):
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
         col = vic.find_check_column(df)
         if col is not None:
-            values = df[col].dropna().astype(str).map(lambda x: x if "_" not in x else "_".join(x.split("_")[:-1]))
+            values = df[col].dropna().astype(str).map(lambda x: x.split("_")[0])     # index code before the first _
             codes = {_norm(v) for v in values if v.strip() and v.strip().lower() != "nan"}
             if codes:
                 return codes, f"คอลัมน์ {col}"

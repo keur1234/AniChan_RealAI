@@ -618,7 +618,7 @@ def _codes_from_file(path):
     if col is None:
         return None, None
     df = df.dropna(subset=[col])
-    raw = df[col].astype(str).map(lambda x: x if "_" not in x else "_".join(x.split("_")[:-1]))
+    raw = df[col].astype(str).map(lambda x: x.split("_")[0])        # index code before the first _
     out = df.assign(**{"index codes": raw.map(normalize), "raw": raw})[["index codes", "raw", "Source Sheet"]]
     return out[(out["index codes"] != "") & (out["index codes"] != "NAN")], str(col)
 

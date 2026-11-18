@@ -29,7 +29,7 @@ import fas_rules
 
 # ================= CONFIG (เหมือนสคริปต์เดิม) =================
 CANDIDATE_COLUMNS = [
-    'Name', 'IndexCode', 'Index code', 'Asset ID', 'AssetID',
+    'Honeywell Point Name', 'Name', 'IndexCode', 'Index code', 'Asset ID', 'AssetID',
     'Index', 'INDEX', 'INDEX DEVICE 1', '* Equipment ID', 'Equipment ID', 'OBK.FM_25Digits_TAG', 'ItemName',
     '*Equipment ID', 'OBK.FM_25Digits_TAG\nString\nInstance\nIdentity Data', 'NEW INDEX CODE'
 ]
@@ -369,7 +369,7 @@ def process_file(path, md, out_root, room=True, dup_mode='sheet', fas=False, sco
 
     df = df_all.dropna(subset=[col]).copy()
     # ตัด _point ท้าย Asset ID
-    df['Asset ID'] = df[col].astype(str).apply(lambda x: x if '_' not in x else '_'.join(x.split('_')[:-1]))
+    df['Asset ID'] = df[col].astype(str).apply(lambda x: x.split('_')[0])    # point names: index code before the first _
     df = df[(df['Asset ID'] != '') & (df['Asset ID'] != 'nan') & (df['Asset ID'].str.strip() != '')].copy()
     if scope:  # e.g. FAS: only CM-FIRE rows, ACS: only CM-ACCS rows (see fas_rules.SCOPES)
         df = df[df['Asset ID'].map(lambda a: fas_rules.in_scope(a, scope))].copy()
