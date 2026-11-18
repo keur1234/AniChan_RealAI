@@ -35,6 +35,7 @@ import vicky_tools  # noqa: E402
 import fas_rules  # noqa: E402
 import llm_openai  # noqa: E402
 import admin_jobs  # noqa: E402
+import rawfinal  # noqa: E402
 
 app = Flask(__name__)
 # Behind Cloud Run / a reverse proxy: trust X-Forwarded-Proto/Host so links are https
@@ -149,6 +150,7 @@ SYSTEM_PROMPT = """หนูชื่อ "Vicky" เป็นผู้ช่ว�
 - ตรวจ FAS: พิมพ์ /check FAS หรือ /summary FAS (หรือเรียก validate_raw_data_file / summarize_raw_data_file ด้วย scope="FAS" เมื่อผู้ใช้ขอตรวจ FAS เท่านั้น)
 - ตรวจ ACS: พิมพ์ /check ACS หรือ /summary ACS (scope="ACS") ตรวจเฉพาะ index codes ที่มี CM-ACCS
 - ตรวจ BMS: พิมพ์ /check BMS (scope="BMS") ไฟล์ต้นทางไม่กรอง ฝั่ง BIM เทียบเฉพาะ Asset Type ของ BMS
+- เทียบ Raw File กับไฟล์ Final (Final_Index_Code_to_iviva): ส่ง 2 ไฟล์แล้วพิมพ์ /rawfinal จะได้ไฟล์ Final ที่มีคอลัมน์ Found in Map Raw File ? (Y/N) ทุกชีท
   จะตรวจเฉพาะ Asset ID ที่มี CM-FIRE และ asset ที่เข้ากฎพิเศษนับเป็น N/A กรณีพิเศษ แยกต่างหาก ไม่นำไปหาใน BIM
 
 ## ศัพท์ของโครงการ OBK (เมื่อพูดเรื่อง index codes ต้องใช้ให้ตรง)
@@ -794,6 +796,55 @@ def remember_group_file(chat_id, user_id, message):
         pending_files_by_id[message["id"]] = info
 
 
+def recent_chat_files(chat_id):
+    """Files sent in this chat that can still be used, newest first."""
+    now = time.time()
+    with pending_lock:
+        files = [v for v in pending_files_by_id.values()
+                 if v.get("chatId") == chat_id and now - v["time"] <= GROUP_FILE_TTL_SECONDS]
+    return sorted(files, key=lambda v: v["time"], reverse=True)
+
+
+def handle_rawfinal(event, chat_id, user_id, mention_user_id=None):
+    """/rawfinal: the latest Final Index Code file + the latest other file (the Raw File) -> Final with a Y/N column."""
+    reply = lambda t: send_reply(event["replyToken"], chat_id, t, mention_user_id=mention_user_id)
+    lang = user_langs.get(user_id, "th")
+    files = [f for f in recent_chat_files(chat_id) if obk_files.is_supported(f.get("fileName", ""))]
+    final = next((f for f in files if rawfinal.is_final_name(f["fileName"])), None)
+    others = [f for f in files if f is not final and not rawfinal.is_final_name(f["fileName"])]
+    raw = next((f for f in others if f.get("senderId") == user_id), None) or (others[0] if others else None)
+    if not final or not raw:
+        reply(tr(user_id,
+                 "กรุณาส่ง 2 ไฟล์ก่อนค่ะ: ไฟล์ Final (ชื่อมี Final_Index_Code_to_iviva) และ Raw File แล้วพิมพ์ /rawfinal\n"
+                 + ("ยังไม่พบไฟล์ Final" if not final else "ยังไม่พบ Raw File") + " ค่ะ",
+                 "Please send 2 files first: the Final file (name containing Final_Index_Code_to_iviva) and the Raw File, "
+                 "then type /rawfinal. " + ("The Final file is missing." if not final else "The Raw File is missing.")))
+        return
+    if event.get("source", {}).get("type") == "user":
+        show_loading(user_id)
+    try:
+        token, out_dir = obk_files.new_job()
+        job_dir = os.path.dirname(out_dir)
+        paths = {}
+        for f in (final, raw):
+            name = obk_files.safe_name(f["fileName"])
+            paths[id(f)] = os.path.join(job_dir, name)
+            with open(paths[id(f)], "wb") as fh:
+                fh.write(f.get("_data") or download_line_content(f["id"])[0])
+        text, out_path = rawfinal.run(paths[id(final)], final["fileName"], paths[id(raw)], raw["fileName"], out_dir, lang)
+    except Exception:
+        log.exception("/rawfinal failed")
+        reply(tr(user_id, "หนูเปิดไฟล์เพื่อเทียบไม่ได้ค่ะ ไฟล์อาจเสียหายหรือมีรหัสผ่าน กรุณาตรวจสอบแล้วส่งใหม่ค่ะ",
+                 "I couldn't open the files to compare them. They may be damaged or password-protected."))
+        return
+    if out_path:
+        text += download_links(user_id, event.get("_base_url", ""), token, [out_path])
+    with chat_locks[chat_id]:
+        remember(chat_id, "/rawfinal", text)
+    store_chat_history_to_csv(chat_id, user_id, "/rawfinal", text)
+    reply(text)
+
+
 _sender_names = {}
 
 
@@ -977,6 +1028,10 @@ def handle_document_request(event, chat_id, user_id, text, mentioned, mention_us
     """/docs, or a request that names a team document (from documents.xlsx). Returns True if handled."""
     reply = lambda t: send_reply(event["replyToken"], chat_id, t, mention_user_id=mention_user_id)
     lowered = text.lower()
+
+    if lowered.startswith("/rawfinal"):
+        handle_rawfinal(event, chat_id, user_id, mention_user_id)
+        return True
 
     if lowered.startswith(("/admin", "/run")):
         if user_id not in ADMIN_USER_IDS:
