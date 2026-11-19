@@ -218,6 +218,16 @@ def system_name(final_name):
     return m.group(1).upper() if m and m.group(1).lower() != "final" else ""
 
 
+def component_name(final_name, final_set):
+    """'C3A' from 'FAS-C3A-Final_...'; otherwise the most common component of the Final index codes."""
+    m = re.match(r"[A-Za-z]{2,6}[-_ ]([A-Za-z0-9]{3})[-_ ]", os.path.basename(final_name or ""))
+    if m and m.group(1).lower() not in ("fin",):
+        return m.group(1).upper()
+    from collections import Counter
+    comps = Counter(c.split("-")[0] for c in final_set if c.count("-") >= 6)
+    return comps.most_common(1)[0][0] if comps else ""
+
+
 def write_mismatch(marked_path, out_path):
     """Only the N rows, one sheet per side: each Final sheet, then the Raw File sheet. Returns {sheet: rows}."""
     from copy import copy
@@ -291,8 +301,8 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
     lines += [f"  {c}" for c in raw_only[:10]]
     if len(raw_only) > 10:
         lines.append(t(f"  และอีก {len(raw_only) - 10:,} index codes", f"  and {len(raw_only) - 10:,} more"))
-    system = system_name(final_name)
-    mismatch_path = os.path.join(out_dir, f"{system + '-' if system else ''}Mismatch-RawFile.xlsx")
+    prefix = "".join(f"{p}-" for p in (system_name(final_name), component_name(final_name, final_set)) if p)
+    mismatch_path = os.path.join(out_dir, f"{prefix}Mismatch-RawFile.xlsx")         # e.g. ACS-C3A-Mismatch-RawFile.xlsx
     mismatch = write_mismatch(out_path, mismatch_path)
     lines.append(t(f"ไฟล์ {os.path.basename(mismatch_path)}: เฉพาะ N แยกชีท ", f"{os.path.basename(mismatch_path)}: N rows only, ")
                  + " | ".join(f"{name} {n:,}" for name, n in mismatch.items()))
