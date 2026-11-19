@@ -9,6 +9,7 @@ import re
 
 FOUND_HEADER = "Found in Map Raw File ?"
 RAW_FOUND_HEADER = "Found in Final ?"
+MARK_COLORS = {"Y": "1F6E3C", "N": "C00000", "-": "7F7F7F"}       # green / red / grey
 FINAL_NAME_RE = re.compile(r"final.*index.*code|to[\s_-]*iviva", re.IGNORECASE)
 HEADER_SCAN_ROWS = 5
 
@@ -21,36 +22,46 @@ def _norm(code):
     return str(code).strip().upper()
 
 
-def raw_entries(path):
-    """({index code: sheet it was first seen in}, how they were found) from a Raw File of any layout."""
-    import validate_index_code as vic
+def _cell_codes(frame):
     import obk_validator
-    log = []
-    df = vic.read_input(path, log)
-    if df is not None:
+    out = []
+    for value in frame.stack().astype(str):
+        out += [_norm(c) for c in obk_validator.find_codes(value.split("_")[0])]
+    return out
+
+
+def raw_entries(path):
+    """({index code: sheet it was first seen in}, how they were found) from a Raw File of any layout.
+    Each sheet is read on its own: the usual index code column (header row found automatically), else every cell
+    that looks like an index code."""
+    import pandas as pd
+    import validate_index_code as vic
+    entries, how = {}, []
+    if path.lower().endswith(".csv"):
+        sheets = {os.path.splitext(os.path.basename(path))[0]: (lambda h: pd.read_csv(path, header=h, dtype=str),
+                                                                 lambda: pd.read_csv(path, header=None, dtype=str))}
+    else:
+        xls = pd.ExcelFile(path)
+        sheets = {sh: ((lambda h, sh=sh: pd.read_excel(xls, sheet_name=sh, header=h, dtype=str)),
+                       (lambda sh=sh: pd.read_excel(xls, sheet_name=sh, header=None, dtype=str)))
+                  for sh in xls.sheet_names}
+    for sheet, (reader, raw_reader) in sheets.items():
+        df, _ = vic.read_with_header_search(reader)
+        if df is None or df.empty:
+            continue
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
         col = vic.find_check_column(df)
         if col is not None:
-            entries = {}
-            sheets = df["Source Sheet"] if "Source Sheet" in df.columns else [""] * len(df)
-            for value, sheet in zip(df[col], sheets):
-                if value is None or str(value).strip().lower() in ("", "nan"):
-                    continue
-                code = _norm(str(value).split("_")[0])          # index code before the first _
-                if code:
-                    entries.setdefault(code, str(sheet))
-            if entries:
-                return entries, f"คอลัมน์ {col}"
-    # Unknown layout: take every cell that looks like an index code
-    import pandas as pd
-    frames = {"csv": pd.read_csv(path, dtype=str, header=None)} if path.lower().endswith(".csv") else \
-        pd.read_excel(path, sheet_name=None, dtype=str, header=None)
-    entries = {}
-    for sheet, frame in frames.items():
-        for value in frame.stack().astype(str):
-            for code in obk_validator.find_codes(value.split("_")[0]):
-                entries.setdefault(_norm(code), str(sheet))
-    return entries, "ค้นจากทุกช่องในไฟล์ (ไม่พบคอลัมน์ index codes)"
+            codes = [_norm(str(v).split("_")[0]) for v in df[col] if v is not None and str(v).strip().lower() not in ("", "nan")]
+            how.append(f"{sheet}: คอลัมน์ {col}")
+        else:
+            codes = _cell_codes(raw_reader())
+            if codes:
+                how.append(f"{sheet}: ค้นจากทุกช่อง")
+        for code in codes:
+            if code:
+                entries.setdefault(code, str(sheet))
+    return entries, ", ".join(how) or "ไม่พบ index codes"
 
 
 def raw_codes(path):
@@ -76,7 +87,7 @@ def exception_note(code):
     return ""
 
 
-def add_raw_sheet(out_path, entries, raw_name, final_set):
+def add_raw_sheet(out_path, entries, raw_name, final_by_sheet):
     """Sheet with the Raw File's index codes and whether each is in the Final file (Y / N, '-' for N/A and exceptions)."""
     from copy import copy
     from openpyxl import load_workbook
@@ -88,7 +99,9 @@ def add_raw_sheet(out_path, entries, raw_name, final_set):
     while title in wb.sheetnames:
         title += "+"
     ws = wb.create_sheet(title)
-    headers = ["#", f"Index Code - Raw File ({raw_name})"[:120], "Source Sheet", RAW_FOUND_HEADER, "Note"]
+    final_set = set().union(*final_by_sheet.values()) if final_by_sheet else set()
+    headers = ["#", f"Index Code - Raw File ({raw_name})"[:120], "Source Sheet", RAW_FOUND_HEADER] + \
+              [f"In Final: {name}" for name in final_by_sheet] + ["Note"]
     for i, h in enumerate(headers, 1):
         cell = ws.cell(1, i, h)
         if style is not None:
@@ -98,13 +111,17 @@ def add_raw_sheet(out_path, entries, raw_name, final_set):
     for n, (code, sheet) in enumerate(entries.items(), 1):
         note = exception_note(code)
         mark = "-" if note else ("Y" if code in final_set else "N")
+        per_sheet = ["-" if note else ("Y" if code in codes else "N") for codes in final_by_sheet.values()]
         counts[mark] += 1
-        ws.append([n, code, sheet, mark, note])
-        cell = ws.cell(n + 1, 4)
-        cell.alignment = Alignment(horizontal="center")
-        cell.font = Font(bold=True, color={"Y": "1F6E3C", "N": "C00000", "-": "7F7F7F"}[mark])
-    for col, width in zip("ABCDE", (7, 42, 18, 20, 26)):
-        ws.column_dimensions[col].width = width
+        ws.append([n, code, sheet, mark] + per_sheet + [note])
+        for i, m in enumerate([mark] + per_sheet):
+            cell = ws.cell(n + 1, 4 + i)
+            cell.alignment = Alignment(horizontal="center")
+            cell.font = Font(bold=True, color=MARK_COLORS[m])
+    from openpyxl.utils import get_column_letter
+    widths = [7, 42, 18, 18] + [20] * len(final_by_sheet) + [26]
+    for i, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
     wb.save(out_path)
@@ -129,7 +146,7 @@ def _code_column(ws):
 
 
 def mark_final(final_path, codes, out_path):
-    """Add the Y/N column to every sheet of the Final file. Returns [{sheet, header, found, missing, no_column}]."""
+    """Add the Y / N / - column to every sheet of the Final file. Returns [{sheet, header, found, missing, skipped, no_column}]."""
     from copy import copy
     from openpyxl import load_workbook
     from openpyxl.styles import Alignment, Font
@@ -152,15 +169,16 @@ def mark_final(final_path, codes, out_path):
         if ref.has_style:
             head.font, head.fill, head.border = copy(ref.font), copy(ref.fill), copy(ref.border)
             head.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        found = missing = 0
+        found = missing = skipped = 0
         for r in range(header_row + 1, ws.max_row + 1):
             value = ws.cell(r, col).value
             if value is None or not str(value).strip():
                 continue
-            hit = _norm(value) in codes
-            found, missing = found + hit, missing + (not hit)
-            cell = ws.cell(r, new_col, "Y" if hit else "N")
-            cell.font = Font(bold=True, color="1F6E3C" if hit else "C00000")
+            code = _norm(value)
+            mark = "-" if exception_note(code) else ("Y" if code in codes else "N")
+            found, missing, skipped = found + (mark == "Y"), missing + (mark == "N"), skipped + (mark == "-")
+            cell = ws.cell(r, new_col, mark)
+            cell.font = Font(bold=True, color=MARK_COLORS[mark])
             cell.alignment = Alignment(horizontal="center")
             src = ws.cell(r, col)
             if src.has_style:
@@ -168,23 +186,27 @@ def mark_final(final_path, codes, out_path):
         ws.column_dimensions[get_column_letter(new_col)].width = 22
         if ws.auto_filter.ref:
             ws.auto_filter.ref = ws.dimensions
-        report.append({"sheet": ws.title, "header": str(ref.value or ""), "found": found, "missing": missing})
+        report.append({"sheet": ws.title, "header": str(ref.value or ""), "found": found, "missing": missing, "skipped": skipped})
     wb.save(out_path)
     return report
 
 
-def final_codes(final_path):
+def final_codes_by_sheet(final_path):
+    """{sheet name: set of its index codes} for the Final file."""
     from openpyxl import load_workbook
     wb = load_workbook(final_path, read_only=True)
-    out = set()
+    out = {}
     for ws in wb.worksheets:
         header_row, col = _code_column(ws)
         if col:
-            for (v,) in ws.iter_rows(min_row=header_row + 1, min_col=col, max_col=col, values_only=True):
-                if v is not None and str(v).strip():
-                    out.add(_norm(v))
+            out[ws.title] = {_norm(v) for (v,) in ws.iter_rows(min_row=header_row + 1, min_col=col, max_col=col, values_only=True)
+                             if v is not None and str(v).strip() and str(v).strip() != FOUND_HEADER}
     wb.close()
     return out
+
+
+def final_codes(final_path):
+    return set().union(*final_codes_by_sheet(final_path).values())
 
 
 def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
@@ -205,11 +227,12 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
         if r.get("no_column"):
             lines.append(t(f"- {r['sheet']}: ไม่พบคอลัมน์ index codes (ข้าม)", f"- {r['sheet']}: no index code column (skipped)"))
         else:
-            total = r["found"] + r["missing"]
-            pct = f"{r['found'] / total * 100:.2f}%" if total else "-"
-            lines.append(f"- {r['sheet']} ({r['header']}): Y {r['found']:,} | N {r['missing']:,} ({pct} Y)")
-    final_set = final_codes(out_path)
-    sheet, counts = add_raw_sheet(out_path, entries, raw_name, final_set)
+            total = r["found"] + r["missing"]          # '-' (N/A, exceptions) not counted
+            pct = f" ({r['found'] / total * 100:.2f}% Y)" if total else ""
+            lines.append(f"- {r['sheet']} ({r['header']}): Y {r['found']:,} | N {r['missing']:,} | - {r['skipped']:,}{pct}")
+    final_by_sheet = final_codes_by_sheet(out_path)
+    final_set = set().union(*final_by_sheet.values()) if final_by_sheet else set()
+    sheet, counts = add_raw_sheet(out_path, entries, raw_name, final_by_sheet)
     lines.append(t(f"เพิ่มชีท \"{sheet}\": index codes ของ Raw เจอใน Final ไหม: Y {counts['Y']:,} | N {counts['N']:,} | - {counts['-']:,} (N/A และข้อยกเว้น)",
                    f"Added sheet \"{sheet}\": Raw index codes in the Final file: Y {counts['Y']:,} | N {counts['N']:,} | - {counts['-']:,} (N/A and exceptions)"))
     raw_only = sorted(c for c in codes - final_set if not exception_note(c))
