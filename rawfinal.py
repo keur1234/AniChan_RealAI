@@ -266,8 +266,38 @@ def write_mismatch(marked_path, out_path):
         if n:
             dst.auto_filter.ref = dst.dimensions
         counts[title] = n
+        if is_raw and n:
+            bim_found = _add_bim_column(dst, n)
+            if bim_found is not None:
+                counts["Raw (N) found in BIM"] = bim_found
     out.save(out_path)
     return counts
+
+
+def _add_bim_column(ws, rows):
+    """Raw (N) sheet: is each index code in the BIM DB? Returns how many are, or None when there is no BIM data."""
+    import bim_index
+    from openpyxl.styles import Alignment, Font
+    from copy import copy
+    if not bim_index.ready():
+        return None
+    codes = [_norm(ws.cell(r, 2).value) for r in range(2, rows + 2)]
+    counts = bim_index.count_by_tag(codes)
+    col = ws.max_column + 1
+    head = ws.cell(1, col, "Found in BIM ?")
+    ref = ws.cell(1, col - 1)
+    if ref.has_style:
+        head.font, head.fill, head.border, head.alignment = copy(ref.font), copy(ref.fill), copy(ref.border), copy(ref.alignment)
+    found = 0
+    for r, code in enumerate(codes, 2):
+        hit = bool(counts.get(code))
+        found += hit
+        cell = ws.cell(r, col, "Y" if hit else "N")
+        cell.font = Font(bold=True, color=MARK_COLORS["Y" if hit else "N"])
+        cell.alignment = Alignment(horizontal="center")
+    ws.column_dimensions[ws.cell(1, col).column_letter].width = 16
+    ws.auto_filter.ref = ws.dimensions
+    return found
 
 
 def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
@@ -305,5 +335,14 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
     mismatch_path = os.path.join(out_dir, f"{prefix}Mismatch-RawFile.xlsx")         # e.g. ACS-C3A-Mismatch-RawFile.xlsx
     mismatch = write_mismatch(out_path, mismatch_path)
     lines.append(t(f"ไฟล์ {os.path.basename(mismatch_path)}: เฉพาะ N แยกชีท ", f"{os.path.basename(mismatch_path)}: N rows only, ")
-                 + " | ".join(f"{name} {n:,}" for name, n in mismatch.items()))
+                 + " | ".join(f"{name} {n:,}" for name, n in mismatch.items() if name != "Raw (N) found in BIM"))
+    raw_n = next((n for name, n in mismatch.items() if name.startswith("Raw File")), 0)
+    if raw_n:
+        if "Raw (N) found in BIM" in mismatch:
+            hit = mismatch["Raw (N) found in BIM"]
+            import bim_index
+            lines.append(t(f"Raw ที่เป็น N เจอใน BIM: Y {hit:,} | N {raw_n - hit:,} (BIM data {bim_index.last_sync()})",
+                           f"Raw N codes found in BIM: Y {hit:,} | N {raw_n - hit:,} (BIM data {bim_index.last_sync()})"))
+        else:
+            lines.append(t("Raw ที่เป็น N: ยังเทียบ BIM ไม่ได้ (ยังไม่มีข้อมูล BIM)", "Raw N codes: no BIM data to check against"))
     return "\n".join(lines), [out_path, mismatch_path]
