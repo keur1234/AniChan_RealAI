@@ -8,6 +8,7 @@ import os
 import re
 
 FOUND_HEADER = "Found in Map Raw File ?"
+RAW_FOUND_HEADER = "Found in Final ?"
 FINAL_NAME_RE = re.compile(r"final.*index.*code|to[\s_-]*iviva", re.IGNORECASE)
 HEADER_SCAN_ROWS = 5
 
@@ -20,8 +21,8 @@ def _norm(code):
     return str(code).strip().upper()
 
 
-def raw_codes(path):
-    """(set of index codes, how they were found) from a Raw File of any layout."""
+def raw_entries(path):
+    """({index code: sheet it was first seen in}, how they were found) from a Raw File of any layout."""
     import validate_index_code as vic
     import obk_validator
     log = []
@@ -30,20 +31,84 @@ def raw_codes(path):
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
         col = vic.find_check_column(df)
         if col is not None:
-            values = df[col].dropna().astype(str).map(lambda x: x.split("_")[0])     # index code before the first _
-            codes = {_norm(v) for v in values if v.strip() and v.strip().lower() != "nan"}
-            if codes:
-                return codes, f"คอลัมน์ {col}"
+            entries = {}
+            sheets = df["Source Sheet"] if "Source Sheet" in df.columns else [""] * len(df)
+            for value, sheet in zip(df[col], sheets):
+                if value is None or str(value).strip().lower() in ("", "nan"):
+                    continue
+                code = _norm(str(value).split("_")[0])          # index code before the first _
+                if code:
+                    entries.setdefault(code, str(sheet))
+            if entries:
+                return entries, f"คอลัมน์ {col}"
     # Unknown layout: take every cell that looks like an index code
     import pandas as pd
     frames = {"csv": pd.read_csv(path, dtype=str, header=None)} if path.lower().endswith(".csv") else \
         pd.read_excel(path, sheet_name=None, dtype=str, header=None)
-    codes = set()
-    for frame in frames.values():
+    entries = {}
+    for sheet, frame in frames.items():
         for value in frame.stack().astype(str):
-            for code in obk_validator.find_codes(value.split("_")[0] if "_" in value else value):
-                codes.add(_norm(code))
-    return codes, "ค้นจากทุกช่องในไฟล์ (ไม่พบคอลัมน์ index codes)"
+            for code in obk_validator.find_codes(value.split("_")[0]):
+                entries.setdefault(_norm(code), str(sheet))
+    return entries, "ค้นจากทุกช่องในไฟล์ (ไม่พบคอลัมน์ index codes)"
+
+
+def raw_codes(path):
+    """(set of index codes, how they were found) from a Raw File of any layout."""
+    entries, how = raw_entries(path)
+    return set(entries), how
+
+
+def exception_note(code):
+    """Why a code is N/A or an exception (shown as '-' instead of Y/N), or '' for a normal code."""
+    import fas_rules
+    import validate_index_code as vic
+    if vic.has_allf_area(code):
+        return "EXCEPTION (ALLF)"
+    if vic.has_exception_suffix(code):
+        return "EXCEPTION (suffix)"
+    for rule in vic.SPECIAL_TYPE_OVERRIDES:
+        for p in rule["patterns"]:
+            if p in code:
+                return f"N/A ({p})"
+    if fas_rules.is_special(code, vic.get_equipment(code)):
+        return fas_rules.SPECIAL_TYPE + " (FAS)"
+    return ""
+
+
+def add_raw_sheet(out_path, entries, raw_name, final_set):
+    """Sheet with the Raw File's index codes and whether each is in the Final file (Y / N, '-' for N/A and exceptions)."""
+    from copy import copy
+    from openpyxl import load_workbook
+    from openpyxl.styles import Alignment, Font
+    wb = load_workbook(out_path)
+    first = wb.worksheets[0]
+    style = next((c for c in first[1] if c.has_style and c.value), None)
+    title = "Raw File"
+    while title in wb.sheetnames:
+        title += "+"
+    ws = wb.create_sheet(title)
+    headers = ["#", f"Index Code - Raw File ({raw_name})"[:120], "Source Sheet", RAW_FOUND_HEADER, "Note"]
+    for i, h in enumerate(headers, 1):
+        cell = ws.cell(1, i, h)
+        if style is not None:
+            cell.font, cell.fill, cell.border = copy(style.font), copy(style.fill), copy(style.border)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    counts = {"Y": 0, "N": 0, "-": 0}
+    for n, (code, sheet) in enumerate(entries.items(), 1):
+        note = exception_note(code)
+        mark = "-" if note else ("Y" if code in final_set else "N")
+        counts[mark] += 1
+        ws.append([n, code, sheet, mark, note])
+        cell = ws.cell(n + 1, 4)
+        cell.alignment = Alignment(horizontal="center")
+        cell.font = Font(bold=True, color={"Y": "1F6E3C", "N": "C00000", "-": "7F7F7F"}[mark])
+    for col, width in zip("ABCDE", (7, 42, 18, 20, 26)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    wb.save(out_path)
+    return title, counts
 
 
 def _code_column(ws):
@@ -125,7 +190,8 @@ def final_codes(final_path):
 def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
     """Mark the Final file. Returns (reply text, output path or None)."""
     t = (lambda th, en: th) if lang == "th" else (lambda th, en: en)
-    codes, how = raw_codes(raw_path)
+    entries, how = raw_entries(raw_path)
+    codes = set(entries)
     if not codes:
         return t(f"หนูไม่พบ index codes ในไฟล์ Raw {raw_name} ค่ะ", f"I found no index codes in the Raw File {raw_name}."), None
     stem = os.path.splitext(os.path.basename(final_name))[0]
@@ -142,8 +208,12 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
             total = r["found"] + r["missing"]
             pct = f"{r['found'] / total * 100:.2f}%" if total else "-"
             lines.append(f"- {r['sheet']} ({r['header']}): Y {r['found']:,} | N {r['missing']:,} ({pct} Y)")
-    raw_only = sorted(codes - final_codes(out_path))
-    lines.append(t(f"index codes ใน Raw ที่ไม่มีใน Final: {len(raw_only):,}", f"Raw index codes not in the Final file: {len(raw_only):,}"))
+    final_set = final_codes(out_path)
+    sheet, counts = add_raw_sheet(out_path, entries, raw_name, final_set)
+    lines.append(t(f"เพิ่มชีท \"{sheet}\": index codes ของ Raw เจอใน Final ไหม: Y {counts['Y']:,} | N {counts['N']:,} | - {counts['-']:,} (N/A และข้อยกเว้น)",
+                   f"Added sheet \"{sheet}\": Raw index codes in the Final file: Y {counts['Y']:,} | N {counts['N']:,} | - {counts['-']:,} (N/A and exceptions)"))
+    raw_only = sorted(c for c in codes - final_set if not exception_note(c))
+    lines.append(t(f"index codes ใน Raw ที่ไม่มีใน Final (N): {len(raw_only):,}", f"Raw index codes not in the Final file (N): {len(raw_only):,}"))
     lines += [f"  {c}" for c in raw_only[:10]]
     if len(raw_only) > 10:
         lines.append(t(f"  และอีก {len(raw_only) - 10:,} index codes", f"  and {len(raw_only) - 10:,} more"))
