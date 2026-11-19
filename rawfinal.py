@@ -70,10 +70,18 @@ def raw_codes(path):
     return set(entries), how
 
 
-def exception_note(code):
-    """Why a code is N/A or an exception (shown as '-' instead of Y/N), or '' for a normal code."""
+# Final files of these systems only cover index codes containing this text; anything else is '-'
+SYSTEM_ONLY = {"FAS": "CM-FIRE"}
+
+
+def exception_note(code, system=""):
+    """Why a code is N/A or an exception (shown as '-' instead of Y/N), or '' for a normal code.
+    system: from the Final file name (e.g. FAS -> only CM-FIRE codes count)."""
     import fas_rules
     import validate_index_code as vic
+    only = SYSTEM_ONLY.get(system)
+    if only and only not in code:
+        return f"ไม่ใช่ {only} ({system})"
     if vic.has_allf_area(code):
         return "EXCEPTION (ALLF)"
     if vic.has_exception_suffix(code):
@@ -90,7 +98,7 @@ def exception_note(code):
     return ""
 
 
-def add_raw_sheet(out_path, entries, raw_name, final_by_sheet):
+def add_raw_sheet(out_path, entries, raw_name, final_by_sheet, system=""):
     """Sheet with the Raw File's index codes and whether each is in the Final file (Y / N, '-' for N/A and exceptions)."""
     from copy import copy
     from openpyxl import load_workbook
@@ -112,7 +120,7 @@ def add_raw_sheet(out_path, entries, raw_name, final_by_sheet):
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     counts = {"Y": 0, "N": 0, "-": 0}
     for n, (code, sheet) in enumerate(entries.items(), 1):
-        note = exception_note(code)
+        note = exception_note(code, system)
         mark = "-" if note else ("Y" if code in final_set else "N")
         per_sheet = ["-" if note else ("Y" if code in codes else "N") for codes in final_by_sheet.values()]
         counts[mark] += 1
@@ -148,7 +156,7 @@ def _code_column(ws):
     return (1, best) if best else (None, None)
 
 
-def mark_final(final_path, codes, out_path):
+def mark_final(final_path, codes, out_path, system=""):
     """Add the Y / N / - column to every sheet of the Final file. Returns [{sheet, header, found, missing, skipped, no_column}]."""
     from copy import copy
     from openpyxl import load_workbook
@@ -178,7 +186,7 @@ def mark_final(final_path, codes, out_path):
             if value is None or not str(value).strip():
                 continue
             code = _norm(value)
-            mark = "-" if exception_note(code) else ("Y" if code in codes else "N")
+            mark = "-" if exception_note(code, system) else ("Y" if code in codes else "N")
             found, missing, skipped = found + (mark == "Y"), missing + (mark == "N"), skipped + (mark == "-")
             cell = ws.cell(r, new_col, mark)
             cell.font = Font(bold=True, color=MARK_COLORS[mark])
@@ -309,9 +317,12 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
         return t(f"หนูไม่พบ index codes ในไฟล์ Raw {raw_name} ค่ะ", f"I found no index codes in the Raw File {raw_name}."), []
     stem = os.path.splitext(os.path.basename(final_name))[0]
     out_path = os.path.join(out_dir, f"{stem}_RawCheck.xlsx")
-    report = mark_final(final_path, codes, out_path)
+    system = system_name(final_name)
+    report = mark_final(final_path, codes, out_path, system)
     lines = [t("เทียบ Raw File กับ Final Index Code", "Raw File vs Final Index Code"),
-             f"Final: {final_name}",
+             f"Final: {final_name}" + (t(f" (ระบบ {system}: นับเฉพาะ {SYSTEM_ONLY[system]} ตัวอื่นเป็น -)",
+                                                       f" ({system}: only {SYSTEM_ONLY[system]} counts, others are -)")
+                                                     if system in SYSTEM_ONLY else ""),
              f"Raw: {raw_name} ({how}, {len(codes):,} index codes {t('ไม่ซ้ำ', 'unique')})",
              t(f"เพิ่มคอลัมน์ \"{FOUND_HEADER}\" ทุกชีท", f"Added \"{FOUND_HEADER}\" to every sheet")]
     for r in report:
@@ -323,10 +334,10 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
             lines.append(f"- {r['sheet']} ({r['header']}): Y {r['found']:,} | N {r['missing']:,} | - {r['skipped']:,}{pct}")
     final_by_sheet = final_codes_by_sheet(out_path)
     final_set = set().union(*final_by_sheet.values()) if final_by_sheet else set()
-    sheet, counts = add_raw_sheet(out_path, entries, raw_name, final_by_sheet)
+    sheet, counts = add_raw_sheet(out_path, entries, raw_name, final_by_sheet, system)
     lines.append(t(f"เพิ่มชีท \"{sheet}\": index codes ของ Raw เจอใน Final ไหม: Y {counts['Y']:,} | N {counts['N']:,} | - {counts['-']:,} (N/A และข้อยกเว้น)",
                    f"Added sheet \"{sheet}\": Raw index codes in the Final file: Y {counts['Y']:,} | N {counts['N']:,} | - {counts['-']:,} (N/A and exceptions)"))
-    raw_only = sorted(c for c in codes - final_set if not exception_note(c))
+    raw_only = sorted(c for c in codes - final_set if not exception_note(c, system))
     lines.append(t(f"index codes ใน Raw ที่ไม่มีใน Final (N): {len(raw_only):,}", f"Raw index codes not in the Final file (N): {len(raw_only):,}"))
     lines += [f"  {c}" for c in raw_only[:10]]
     if len(raw_only) > 10:
