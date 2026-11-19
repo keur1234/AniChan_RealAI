@@ -84,6 +84,9 @@ def exception_note(code):
                 return f"N/A ({p})"
     if fas_rules.is_special(code, vic.get_equipment(code)):
         return fas_rules.SPECIAL_TYPE + " (FAS)"
+    import compare_asset_id                      # same exempt equipment as the BIM check report (part 6)
+    if compare_asset_id._is_exempt(code):
+        return f"ยกเว้น ({code.split('-')[compare_asset_id.EXEMPT_PART_NO - 1]})"
     return ""
 
 
