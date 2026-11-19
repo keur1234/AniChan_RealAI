@@ -212,13 +212,61 @@ def final_codes(final_path):
     return set().union(*final_codes_by_sheet(final_path).values())
 
 
+def system_name(final_name):
+    """'FAS' from 'FAS-C3A-Final_Index_Code_to_iviva_v.1.xlsx' ('' if the name doesn't start with a system)."""
+    m = re.match(r"([A-Za-z]{2,6})[-_ ]", os.path.basename(final_name or ""))
+    return m.group(1).upper() if m and m.group(1).lower() != "final" else ""
+
+
+def write_mismatch(marked_path, out_path):
+    """Only the N rows, one sheet per side: each Final sheet, then the Raw File sheet. Returns {sheet: rows}."""
+    from copy import copy
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.utils import get_column_letter
+    src = load_workbook(marked_path)
+    out = Workbook()
+    out.remove(out.active)
+    counts = {}
+    for ws in src.worksheets:
+        is_raw = ws.title.startswith("Raw File")
+        header_row = 1 if is_raw else (_code_column(ws)[0] or 1)
+        headers = [c.value for c in ws[header_row]]
+        mark_name = RAW_FOUND_HEADER if is_raw else FOUND_HEADER
+        if mark_name not in headers:
+            continue
+        mark_col = headers.index(mark_name)
+        title = (f"{ws.title} (N)" if is_raw else f"Final - {ws.title} (N)")[:31]
+        dst = out.create_sheet(title)
+        for i, cell in enumerate(ws[header_row], 1):
+            new = dst.cell(1, i, cell.value)
+            if cell.has_style:
+                new.font, new.fill, new.border, new.alignment = copy(cell.font), copy(cell.fill), copy(cell.border), copy(cell.alignment)
+        n = 0
+        for row in ws.iter_rows(min_row=header_row + 1):
+            if row[mark_col].value == "N":
+                n += 1
+                for i, cell in enumerate(row, 1):
+                    new = dst.cell(n + 1, i, cell.value)
+                    if cell.has_style:
+                        new.font, new.alignment = copy(cell.font), copy(cell.alignment)
+        for i in range(1, len(headers) + 1):
+            letter = get_column_letter(i)
+            dst.column_dimensions[letter].width = ws.column_dimensions[letter].width or 14
+        dst.freeze_panes = "A2"
+        if n:
+            dst.auto_filter.ref = dst.dimensions
+        counts[title] = n
+    out.save(out_path)
+    return counts
+
+
 def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
-    """Mark the Final file. Returns (reply text, output path or None)."""
+    """Mark the Final file and save the mismatches. Returns (reply text, [output paths])."""
     t = (lambda th, en: th) if lang == "th" else (lambda th, en: en)
     entries, how = raw_entries(raw_path)
     codes = set(entries)
     if not codes:
-        return t(f"หนูไม่พบ index codes ในไฟล์ Raw {raw_name} ค่ะ", f"I found no index codes in the Raw File {raw_name}."), None
+        return t(f"หนูไม่พบ index codes ในไฟล์ Raw {raw_name} ค่ะ", f"I found no index codes in the Raw File {raw_name}."), []
     stem = os.path.splitext(os.path.basename(final_name))[0]
     out_path = os.path.join(out_dir, f"{stem}_RawCheck.xlsx")
     report = mark_final(final_path, codes, out_path)
@@ -243,4 +291,9 @@ def run(final_path, final_name, raw_path, raw_name, out_dir, lang="th"):
     lines += [f"  {c}" for c in raw_only[:10]]
     if len(raw_only) > 10:
         lines.append(t(f"  และอีก {len(raw_only) - 10:,} index codes", f"  and {len(raw_only) - 10:,} more"))
-    return "\n".join(lines), out_path
+    system = system_name(final_name)
+    mismatch_path = os.path.join(out_dir, f"{system + '-' if system else ''}Mismatch-RawFile.xlsx")
+    mismatch = write_mismatch(out_path, mismatch_path)
+    lines.append(t(f"ไฟล์ {os.path.basename(mismatch_path)}: เฉพาะ N แยกชีท ", f"{os.path.basename(mismatch_path)}: N rows only, ")
+                 + " | ".join(f"{name} {n:,}" for name, n in mismatch.items()))
+    return "\n".join(lines), [out_path, mismatch_path]

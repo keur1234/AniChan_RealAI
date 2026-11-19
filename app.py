@@ -831,14 +831,14 @@ def handle_rawfinal(event, chat_id, user_id, mention_user_id=None):
             paths[id(f)] = os.path.join(job_dir, name)
             with open(paths[id(f)], "wb") as fh:
                 fh.write(f.get("_data") or download_line_content(f["id"])[0])
-        text, out_path = rawfinal.run(paths[id(final)], final["fileName"], paths[id(raw)], raw["fileName"], out_dir, lang)
+        text, out_paths = rawfinal.run(paths[id(final)], final["fileName"], paths[id(raw)], raw["fileName"], out_dir, lang)
     except Exception:
         log.exception("/rawfinal failed")
         reply(tr(user_id, "หนูเปิดไฟล์เพื่อเทียบไม่ได้ค่ะ ไฟล์อาจเสียหายหรือมีรหัสผ่าน กรุณาตรวจสอบแล้วส่งใหม่ค่ะ",
                  "I couldn't open the files to compare them. They may be damaged or password-protected."))
         return
-    if out_path:
-        text += download_links(user_id, event.get("_base_url", ""), token, [out_path])
+    if out_paths:
+        text += download_links(user_id, event.get("_base_url", ""), token, out_paths)
     with chat_locks[chat_id]:
         remember(chat_id, "/rawfinal", text)
     store_chat_history_to_csv(chat_id, user_id, "/rawfinal", text)
